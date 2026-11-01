@@ -1,22 +1,30 @@
 # Project status
 
-**Updated 2026-10-31. Status refers only to changes in this repository.**
+**Updated 2026-10-31. This document distinguishes verified repository work from future work.**
 
 | Workstream | State |
 | --- | --- |
-| Public repo and foundational documentation | Established |
-| Draft Master Plan, Class A contract and QA plan | Documented, subject to review |
-| Minimal CI and local-only endpoint guard | Scaffold; tests must pass in CI |
-| NAD release pinning and rights verification | Not done |
-| Sandbox isolation/rebuild validation | Not done for this repository |
-| Pilot county selection | Not done |
-| NAD loader / normalization | Not built |
+| Public repository, master plan, governance docs | Established |
+| Offline sandbox URL guard unit tests | 2 tests passed in locally reconstructed source; CI not yet independently verified |
+| CI workflow on main | Workflow committed; **run result not verified** |
+| Main branch protection and clean checkout | PENDING |
+| NAD candidate | **R24, compiled 2026-09-30, publisher identified** |
+| NAD file acquired and SHA-256 pinned | Not done |
+| Dataset rights/provenance / ODbL review | Pending |
+| Pilot county | Brazoria/Galveston candidates; not selected |
+| Sandbox isolation/rebuild | Not verified for this repository |
+| NAD loader and normalization | Not built |
 | OSM address index | Not built |
-| Conflation and duplicate guards | Not built |
-| Independent QA evidence | Not collected |
+| Class A engine and guard fixtures | Not built |
+| QA and actual candidate counts | Not collected |
 | Sandbox changeset exporter | Not built |
-| OSM Wiki / community consultation | Not started |
-| OSM production upload | Not authorized / not implemented |
-| MapRoulette generator | Not built |
+| OSM Wiki/community consultation | Not started |
+| OSM production upload | Not authorized and not implemented |
+| MapRoulette challenge generator | Not built |
 
-See [GitHub issues](https://github.com/L3Pro/osm-address-import/issues) for the execution backlog. Infrastructure discussed in previous work must be independently revalidated before claiming a complete foundation.
+- [Foundation validation record](FOUNDATION_VALIDATION.md)
+- [Source investigation and release candidate](DATA_SOURCES.md)
+- [Pilot county scorecard](PILOT_COUNTY.md)
+- [Open execution issues](https://github.com/L3Pro/osm-address-import/issues)
+
+Historical Osaka OSM sandbox work is **not** a substitute for independent isolation proof.
