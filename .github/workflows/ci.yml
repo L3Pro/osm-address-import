@@ -1,0 +1,27 @@
+name: Foundation checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  unittest:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Run offline unit tests
+        run: python -m unittest discover -s tests -v
+      - name: Verify required safety documents
+        run: |
+          test -s README.md
+          test -s docs/MASTER_PLAN.md
+          test -s docs/CLASS_A_RULES.md
+          test -s docs/QA_PLAN.md
+          test -s docs/IMPORT_PROPOSAL.md
+          test -s docs/COMMUNITY_REVIEW.md

@@ -1,0 +1,26 @@
+name: Implementation task
+description: Bounded engineering or research task tied to a release gate
+title: "[Task] "
+labels: []
+body:
+  - type: textarea
+    id: objective
+    attributes:
+      label: Objective and non-goals
+      description: One deliverable; explicitly specify what not to change
+    validations:
+      required: true
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: Acceptance criteria / tests
+      description: Include fixtures, commands and audit evidence
+    validations:
+      required: true
+  - type: textarea
+    id: safety
+    attributes:
+      label: OSM / data rights and safety impact
+      description: Explain effect on existing OSM data; no live import without gate G4
+    validations:
+      required: true

@@ -1,0 +1,42 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+dist/
+build/
+
+# Local credentials
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*oauth*
+*token*
+
+# Data, databases, derived address exports
+data/
+downloads/
+scratch/
+tmp/
+output/
+outputs/
+reports/runs/
+*.pbf
+*.osm
+*.osc
+*.gpkg
+*.gdb/
+*.sqlite
+*.db
+*.parquet
+*.fgb
+*.geodatabase
+*.dump
+*.sql.gz
+*.csv.gz
