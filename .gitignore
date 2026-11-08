@@ -40,3 +40,10 @@ reports/runs/
 *.dump
 *.sql.gz
 *.csv.gz
+*.csv
+*.tsv
+*.jsonl
+*.geojson
+*.shp
+*.shx
+*.dbf

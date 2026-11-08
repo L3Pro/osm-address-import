@@ -44,7 +44,3 @@ STOP immediately and report if you find production OSM credentials or routes, ca
 - Do not claim Gate G0 is complete until source release rights/provenance (#2) and pilot geography (#4) also pass.
 
 **Do not launch parallel coding agents or begin further sprints.** Final response must include PR URL, results, unresolved risks, and the next bounded action.
-
-## Optional bounded observation — Rails/iD performance (Issue #15)
-
-Previous Oct 28 browser evidence: an approximately 151 KB iD `map.json` request required ~7.96s (TTFB/wait ~7.58s). Since the OSM Rails environment is under inspection, collect only low-impact read-only diagnostic facts **if doing so does not delay or interfere with G0**: actual Rails environment, web server mode, route served for the iD map request, whether CGImap is installed, and a few sequential local read-only same-bbox request timings. Explicitly separate Rails/SQL processing, proxy, and browser latency where evidence permits. Never start stress tests, install CGImap, change server/DB configuration, restart services, or write to existing Osaka data. Put performance observations in a separate `docs/RAILS_PERFORMANCE_BASELINE.md` section or report them as deferred to [Issue #15](https://github.com/L3Pro/osm-address-import/issues/15). This is evidence collection, **not permission to optimize the server**.
