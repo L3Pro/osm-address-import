@@ -1,0 +1,15 @@
+source_record_id,source_authority,house_number,pre_directional,street_name,street_suffix,post_directional,unit_type,unit_id,locality,state,county_id,postcode,longitude,latitude
+S1,Synthetic Fixture Authority,100,North,Fiction,Road,,,,Example Town,TX,SYN-TX-001,77001,-95.5,29.5
+S2,Synthetic Fixture Authority,100,N,Fiction,RD,,,,Example Town,TX,SYN-TX-001,77001,-95.5,29.5
+S3,Synthetic Fixture Authority,102,,Fiction,Street,,Apartment,01,Example Town,TX,SYN-TX-001,77001,-95.5,29.5
+S4,Synthetic Fixture Authority,102,,Fiction,ST,,APT,02,Example Town,TX,SYN-TX-001,77001,-95.5,29.5
+S5,Synthetic Fixture Authority,104,,Fiction,Street,,,,Example Town,TX,SYN-TX-001,77001,-95.5,29.5
+S6,Synthetic Fixture Authority,104,,Fiction,ST,,,,Example Town,TX,SYN-TX-001,77001,-95.5001,29.5
+S7,Synthetic Fixture Authority,106,,Fiction,ST,,,,Example Town,TX,SYN-TX-001,77001,999,29.5
+S8,Synthetic Fixture Authority,108,,,ST,,,,Example Town,TX,SYN-TX-001,77001,-95.5,29.5
+S9,Synthetic Fixture Authority,110,,Fiction,ST,,,,Example Town,TX,OTHER,77001,-95.5,29.5
+S10,,112,,Fiction,ST,,,,Example Town,TX,SYN-TX-001,77001,-95.5,29.5
+S11,Synthetic Fixture Authority,114,,Fiction,ST,,,,Example Town,TX,SYN-TX-001,ABC,-95.5,29.5
+S12,Synthetic Fixture Authority,200,,St John,Street,,,,Example Town,TX,SYN-TX-001,77001,-95.5,29.5
+S13,Synthetic Fixture Authority,200,,Saint John,Street,,,,Example Town,TX,SYN-TX-001,77001,-95.5,29.5
+S14,Synthetic Fixture Authority,116,,Fiction,ST,,APT,,Example Town,TX,SYN-TX-001,77001,-95.5,29.5

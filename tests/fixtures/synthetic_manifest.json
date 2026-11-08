@@ -1,0 +1,11 @@
+{
+  "schema_version": "synthetic-address-v1",
+  "source_name": "synthetic-g1-fixture",
+  "release_id": "fixture-1",
+  "sha256": "d2bf2f313dadc76a20c3051a0e45fe7e32f46198a37e639157e62eccfc096323",
+  "rights_status": "synthetic",
+  "state": "TX",
+  "county_id": "SYN-TX-001",
+  "bbox": [-96.0, 29.0, -95.0, 30.0],
+  "crs": "EPSG:4326"
+}
