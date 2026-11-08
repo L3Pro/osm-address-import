@@ -15,7 +15,7 @@ Open-source tooling for carefully evaluating and conflating authoritative addres
 
 ## Current state
 
-The repository is a **foundation scaffold**, not a working address importer. The engine, dataset adapters, QA results, sandbox uploader, MapRoulette generator, and community authorization **do not yet exist here**. See [Status](docs/STATUS.md), [Master Plan v1](docs/MASTER_PLAN.md), and the open [issues](https://github.com/L3Pro/osm-address-import/issues).
+The repository now includes a **synthetic-only G1 ingestion foundation**, not a working NAD importer. The real Release 24 adapter, OSM index, conflation engine, QA results, sandbox uploader, MapRoulette generator, and community authorization **do not yet exist here**. See [Status](docs/STATUS.md), [Master Plan v1](docs/MASTER_PLAN.md), and the open [issues](https://github.com/L3Pro/osm-address-import/issues).
 
 ## Non-negotiable safety rules
 
@@ -38,11 +38,22 @@ The repository is a **foundation scaffold**, not a working address importer. The
 
 ## Repository development
 
-The initial Python code is a deliberately small **sandbox endpoint guard**, not an uploader. Run its tests without credentials or datasets:
+The Python code includes a sandbox endpoint guard and an offline synthetic address staging pipeline. Run its tests without credentials or real datasets:
 
     python -m unittest discover -s tests -v
 
 No NAD downloads, complete OSM extracts, output address lists, API credentials, or employer-proprietary data belong in this repository. See the [data policy](docs/DATA_SOURCES.md).
+
+To reproduce the synthetic G1 reconciliation:
+
+```sh
+PYTHONPATH=src python3 -m osm_address_import.ingest \
+  --manifest tests/fixtures/synthetic_manifest.json \
+  --input tests/fixtures/synthetic_addresses.csv \
+  --output output/g1-synthetic
+```
+
+The output reports 14 input rows, 5 accepted, 9 rejected, 1 duplicate, and 2 conflicting-address rows. See the [G1 schema and normalization contract](docs/G1_INGESTION.md) for field assumptions, reason codes, and limits. No actual NAD data has been loaded.
 
 ## OSM governance
 
