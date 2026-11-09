@@ -1,0 +1,36 @@
+# Candidate only. This file never recreates the existing Osaka web or DB services.
+services:
+  candidate:
+    image: ${OSM_RAILS_IMAGE:?pin the local Rails image digest}
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
+    working_dir: /app
+    env_file: ${OSM_PRIVATE_ENV_FILE:?private env file required}
+    environment:
+      RAILS_ENV: production
+      RACK_ENV: production
+      RAILS_SERVE_STATIC_FILES: "true"
+      RAILS_LOG_LEVEL: info
+    volumes:
+      - ${OSM_APP_COPY:?private app copy required}:/app
+      - ${OSM_SETTINGS_LOCAL_FILE:?existing private settings required}:/app/config/settings.local.yml:ro
+      - existing-storage:/app/storage
+    ports:
+      - "127.0.0.1:3003:3000"
+    networks: [osaka]
+    mem_limit: 1024m
+    cpus: 1.0
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent --max-time 5 http://127.0.0.1:3000/api/0.6/capabilities.json >/dev/null"]
+      interval: 10s
+      timeout: 6s
+      retries: 12
+
+volumes:
+  existing-storage:
+    external: true
+    name: osm-api-sandbox_web-storage
+
+networks:
+  osaka:
+    external: true
+    name: osm-api-sandbox_default
