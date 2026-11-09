@@ -2,6 +2,9 @@
 
 **2026-11-08 CST (2026-11-09 UTC). Investigation only; no deployment.** The existing Osaka services were not modified, restarted, or reconfigured. No API writes, CGImap installation, remote OSM requests, raw map output, credentials, or private configuration were committed.
 
+
+The [November 7 read-only Osaka baseline](https://github.com/L3Pro/osm-address-import/pull/16) is retained separately as `docs/RAILS_PERFORMANCE_BASELINE.md`. This report adds the isolated mode comparison and does not replace those first measurements.
+
 ## What was measured
 
 The website data layer requests `/api/0.6/map.json?bbox=...`; the app routes this to `Api::MapsController#show`. The existing Osaka Rails process runs in development mode. Its API database has PostgreSQL 14.23, the usual current-node and way-node indexes, and no `pg_stat_statements` extension. CGImap is absent from the current web container. The earlier October browser observation of about 7.96 seconds for an approximately 151 KB response lacks a matching bbox and server request ID, so this report cannot attribute its remote/proxy portion.
