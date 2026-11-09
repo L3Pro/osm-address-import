@@ -35,6 +35,8 @@ The preceding mode-comparison PR has the comparable 1.099 s development and 0.73
 
 ## Approved rollout procedure (not executed)
 
+**Current status: NO-GO.** A later isolated HTTPS Firefox test confirmed login, secure cookies, assets and read-only API calls, but the iD editor stayed blank. The [deployment readiness audit](RAILS_DEPLOYMENT_READINESS.md) records this unresolved blocker. Do not execute the rollout commands until a complete isolated iD render passes, the other readiness blockers are reviewed, and the separate preflight and cutover approvals are granted.
+
 The 2026-11-09 fresh-backup audit restored successfully to an isolated database; see [deployment readiness](RAILS_DEPLOYMENT_READINESS.md). Repeat the bounded backup and independent restore if the snapshot is stale at cutover. First confirm host headroom, the active tunnel service manager, and an agreed maintenance/rollback window. Run these commands on the Osaka host from the repository root. The `make_private_env.py` prompt reads the existing **Osaka test database role** password without echoing it; it creates a new candidate signing key. Keep the entire stage private. Do not run any migration, `db:prepare`, seed, or asset task against the existing checkout.
 
 ```sh
