@@ -4,13 +4,13 @@
 
 ## Evidence and configuration choice
 
-The first read-only Osaka timings are in [PR #16](https://github.com/L3Pro/osm-address-import/pull/16), intended to remain at `docs/RAILS_PERFORMANCE_BASELINE.md`. The isolated mode comparison is in [PR #18](https://github.com/L3Pro/osm-address-import/pull/18), intended to remain at `docs/RAILS_MODE_COMPARISON.md`. Both measurements are retained; this rollout change adds a separate procedure and does not edit either report. Merge PR #16 before #18, then this change, or resolve their links to these final paths during review.
+The first read-only Osaka timings are in [PR #16](https://github.com/L3Pro/osm-address-import/pull/16), intended to remain at `docs/RAILS_PERFORMANCE_BASELINE.md`. The isolated mode comparison is in [PR #18](https://github.com/L3Pro/osm-address-import/pull/18), intended to remain at `docs/RAILS_MODE_COMPARISON.md`. Both measurements are retained; this rollout change adds a separate procedure and does not edit either report. Merge **#16, then #18, then #19**; G1 [PR #17](https://github.com/L3Pro/osm-address-import/pull/17) is independent.
 
-The existing web container uses upstream website revision `e87ef1370fc7a9675a6d7df171e15ebcd36b7513`, the local Rails image digest `sha256:16a161d5016f1158c556bdb9b4aaf359c4fce60b22d5f592bfa47dbe750d1332`, a bind-mounted checkout, `bundle exec rails s`, and loopback port 3002. Its environment defaults to development. The existing database is a separate `db` service on `osm-api-sandbox_default`, and uploaded files use `osm-api-sandbox_web-storage`. The candidate keeps the same source revision, image, database, private application settings, API routes and storage, but uses a clean staged source copy, `RAILS_ENV=production`, `RACK_ENV=production`, precompiled assets, a generated candidate `SECRET_KEY_BASE`, and loopback port 3003. It has a 1 GiB/1 CPU cap. The old web stays on port 3002 until an approved tunnel switch. `compose.rollout.yml` defines only the candidate, so its `up` and `down` do not recreate the old web or DB.
+The existing web container uses upstream website revision `e87ef1370fc7a9675a6d7df171e15ebcd36b7513`, the local Rails image digest `sha256:16a161d5016f1158c556bdb9b4aaf359c4fce60b22d5f592bfa47dbe750d1332`, a bind-mounted checkout, `bundle exec rails s`, and loopback port 3002. Its environment defaults to development. The existing database is a separate `db` service on `osm-api-sandbox_default`, and uploaded files use `osm-api-sandbox_web-storage`. The candidate keeps the same source revision, image, database, private application settings, API routes and storage, but uses a clean staged source copy, `RAILS_ENV=production`, `RACK_ENV=production`, precompiled assets, a generated candidate `SECRET_KEY_BASE`, and loopback port 3003. It has a 1 GiB/1 CPU cap. The old web stays on port 3002 until an approved tunnel switch. The base `compose.rollout.yml` mounts the existing storage read-only and requests read-only PostgreSQL transactions. This does not revoke the existing DB role's write privileges; starting a candidate connected to the original DB requires separate approval. The `compose.cutover.yml` override enables database and storage writes only inside an approved cutover window. Neither file recreates the old web or DB.
 
 The upstream production configuration keeps `force_ssl` and `assume_ssl` enabled. The intended tunnel route should terminate HTTPS upstream; its live remote behavior must be verified before cutover. The inspected tunnel config has exactly one origin line for `http://127.0.0.1:3002`; the reviewed route helper changes only that line to 3003 after validating the whole ingress file. The original private `settings.local.yml` is mounted read-only into the candidate, preserving OAuth client IDs and other site settings without committing them. `DATABASE_URL` and `SECRET_KEY_BASE` stay in a mode-600 ignored file. The upstream `config/database.yml` has no production entry, so the staged copy supplies one using `DATABASE_URL`. The original source/config files are never patched.
 
-The website uses an in-process memory session store when memcache is not configured. A new process cannot inherit the old process's session state; users should expect to log in again after cutover. The new signing key also changes cookie validity. User account data and OAuth applications remain in the same database. This is an explicit operational tradeoff, not a tested session migration. The production app uses its upstream Puma server via `rails s`; a separate process-manager review remains appropriate before relying on higher concurrency.
+The website uses an in-process memory session store when memcache is not configured. A new process cannot inherit the old process's session state; users should expect to log in again after cutover, and a rollback may also require re-login after the browser receives a candidate cookie. The new signing key changes cookie validity. User account data and OAuth applications remain in the same database. This is an explicit operational tradeoff, not a tested session migration. The production app uses its upstream Puma server via `rails s`; a separate process-manager review remains appropriate before relying on higher concurrency.
 
 ## Isolated candidate result
 
@@ -35,16 +35,21 @@ The preceding mode-comparison PR has the comparable 1.099 s development and 0.73
 
 ## Approved rollout procedure (not executed)
 
-The operator must first confirm a current recoverable backup, host headroom, the tunnel service manager, and an agreed maintenance/rollback window. The historical June archive used here does not establish current backup freshness. The command below creates a current read-only dump; its catalog check is **not a restore test**. Independently restore that dump into a separate isolated database and verify its counts before approving cutover. Run these commands on the Osaka host from the repository root. The `make_private_env.py` prompt reads the existing **Osaka test database role** password without echoing it; it creates a new candidate signing key. Keep the entire stage private. Do not run any database migration, `db:prepare`, seed, or asset task against the existing checkout.
+The 2026-11-09 fresh-backup audit restored successfully to an isolated database; see [deployment readiness](RAILS_DEPLOYMENT_READINESS.md). Repeat the bounded backup and independent restore if the snapshot is stale at cutover. First confirm host headroom, the active tunnel service manager, and an agreed maintenance/rollback window. Run these commands on the Osaka host from the repository root. The `make_private_env.py` prompt reads the existing **Osaka test database role** password without echoing it; it creates a new candidate signing key. Keep the entire stage private. Do not run any migration, `db:prepare`, seed, or asset task against the existing checkout.
 
 ```sh
 set -euo pipefail
+umask 077
 export STAGE="$PWD/reports/runs/issue15-osaka-rollout-$(date +%Y%m%d%H%M%S)"
 export SOURCE=/opt/osm-sandbox/osm-api-sandbox/openstreetmap-website
 export SETTINGS="$SOURCE/config/settings.local.yml"
 export RAILS_IMAGE=sha256:16a161d5016f1158c556bdb9b4aaf359c4fce60b22d5f592bfa47dbe750d1332
 export COMPOSE=deploy/osaka-rails-production/compose.rollout.yml
+export CUTOVER_COMPOSE=deploy/osaka-rails-production/compose.cutover.yml
+export RESTORE_COMPOSE=deploy/osaka-rails-production/compose.restore.yml
+export OSM_DB_IMAGE=sha256:7e04bfcf1b20b7ccd558f1977e9f08f72c5683b4b59b021a127cbe370a7ee574
 export PROJECT=issue15-osaka-prod
+export RESTORE_PROJECT=issue15-precutover-restore-$(date +%Y%m%d%H%M%S)
 
 docker ps --filter label=com.docker.compose.project=osm-api-sandbox --format '{{.Names}} {{.Status}}'
 docker network inspect osm-api-sandbox_default --format '{{index .Labels "com.docker.compose.project"}}'
@@ -55,15 +60,27 @@ cloudflared tunnel --config /etc/cloudflared/config.yml ingress validate
 
 bash deploy/osaka-rails-production/prepare_candidate.sh "$SOURCE" "$STAGE" osm-api-sandbox-web-1
 docker exec -e PGOPTIONS='-c default_transaction_read_only=on' osm-api-sandbox-db-1 psql -X -U openstreetmap -d openstreetmap -Atc 'SELECT (SELECT count(*) FROM current_nodes),(SELECT count(*) FROM current_ways),(SELECT count(*) FROM current_relations),(SELECT count(*) FROM current_way_tags)' > "$STAGE/osaka-counts-before.txt"
-docker exec -e PGOPTIONS='-c default_transaction_read_only=on' osm-api-sandbox-db-1 pg_dump -U openstreetmap -d openstreetmap -Fc --no-owner --no-acl > "$STAGE/current-precutover.dump"
+timeout 600 docker exec -e PGOPTIONS='-c default_transaction_read_only=on' osm-api-sandbox-db-1 pg_dump -U openstreetmap -d openstreetmap -Fc --no-owner --no-acl --lock-wait-timeout=5s > "$STAGE/current-precutover.dump"
 docker exec -i osm-api-sandbox-db-1 pg_restore --list < "$STAGE/current-precutover.dump" > "$STAGE/current-precutover.list"
 test -s "$STAGE/current-precutover.list"
 sha256sum "$STAGE/current-precutover.dump" > "$STAGE/current-precutover.sha256"
+test -z "$(docker ps -aq --filter label=com.docker.compose.project=$RESTORE_PROJECT)"
+docker compose -p "$RESTORE_PROJECT" -f "$RESTORE_COMPOSE" up -d --wait db
+timeout 600 docker compose -p "$RESTORE_PROJECT" -f "$RESTORE_COMPOSE" exec -T db pg_restore -U postgres --no-owner --no-acl --exit-on-error -d openstreetmap < "$STAGE/current-precutover.dump"
+docker compose -p "$RESTORE_PROJECT" -f "$RESTORE_COMPOSE" exec -T db psql -X -U postgres -d openstreetmap -Atc 'SELECT (SELECT count(*) FROM current_nodes),(SELECT count(*) FROM current_ways),(SELECT count(*) FROM current_relations),(SELECT count(*) FROM current_way_tags)' > "$STAGE/restore-counts.txt"
+cmp "$STAGE/osaka-counts-before.txt" "$STAGE/restore-counts.txt"
+docker compose -p "$RESTORE_PROJECT" -f "$RESTORE_COMPOSE" down --volumes
 python3 deploy/osaka-rails-production/make_private_env.py "$STAGE/private.env"
 bash deploy/osaka-rails-production/build_assets.sh "$STAGE" "$RAILS_IMAGE" "$STAGE/private.env" "$SETTINGS" > "$STAGE/assets-build.log" 2>&1
 printf 'OSM_RAILS_IMAGE=%s\nOSM_APP_COPY=%s\nOSM_PRIVATE_ENV_FILE=%s\nOSM_SETTINGS_LOCAL_FILE=%s\n' "$RAILS_IMAGE" "$STAGE/app" "$STAGE/private.env" "$SETTINGS" > "$STAGE/compose.env"
 chmod 600 "$STAGE/compose.env"
 docker compose --env-file "$STAGE/compose.env" -p "$PROJECT" -f "$COMPOSE" config --quiet
+```
+
+If restore fails, inspect ownership and remove only the disposable restore project; do not continue. The following side-by-side launch connects to the original DB and storage volume in guarded read-only mode. `PGOPTIONS` sets a transaction default, which application code could override; it is **not** a privilege boundary. Starting this candidate requires explicit authorization even though the route remains on 3002. Check the rendered storage mount and transaction setting before `up`.
+
+```sh
+docker compose --env-file "$STAGE/compose.env" -p "$PROJECT" -f "$COMPOSE" config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin)["services"]["candidate"]; v=[v for v in c["volumes"] if v["target"]=="/app/storage"]; assert len(v)==1 and v[0]["read_only"] and c["environment"]["PGOPTIONS"]=="-c default_transaction_read_only=on"'
 docker compose --env-file "$STAGE/compose.env" -p "$PROJECT" -f "$COMPOSE" up -d candidate
 docker compose --env-file "$STAGE/compose.env" -p "$PROJECT" -f "$COMPOSE" ps
 ```
@@ -79,11 +96,21 @@ docker exec -e PGOPTIONS='-c default_transaction_read_only=on' osm-api-sandbox-d
 cmp "$STAGE/osaka-counts-before.txt" "$STAGE/osaka-counts-after.txt"
 ```
 
-After explicit cutover approval, and only if `cloudflared` is active and the current ingress file still has exactly one port-3002 origin, switch the route. The helper validates a private temporary file, creates a mode-600 `.issue15-backup`, and atomically replaces only the expected origin line. It does **not** restart the tunnel. The service unit at `/etc/systemd/system/cloudflared.service` references this config, but service activation could not be exercised in the current tool environment.
+**Cutover approval is a separate boundary from PR review and read-only side-by-side startup.** It authorizes recreating the candidate with write-capable access to the existing Osaka DB and storage, then changing the one tunnel origin and restarting `cloudflared`. First render the two-file Compose configuration and verify that the storage mount is writable and `PGOPTIONS` is cleared. The helper validates a private temporary file, locks cooperating invocations, rejects a concurrent content change, creates a mode-600 backup, and replaces only the expected origin line with mode-600 permissions. It does **not** restart the tunnel. The unit at `/etc/systemd/system/cloudflared.service` was loaded, active, and enabled during the readiness audit; check it again immediately before use. If its restart fails, restore the previous route and retry the old tunnel before leaving the maintenance window.
 
 ```sh
+docker compose --env-file "$STAGE/compose.env" -p "$PROJECT" -f "$COMPOSE" -f "$CUTOVER_COMPOSE" config --format json | python3 -c 'import json,sys; c=json.load(sys.stdin)["services"]["candidate"]; v=[v for v in c["volumes"] if v["target"]=="/app/storage"]; assert len(v)==1 and not v[0].get("read_only",False) and c["environment"]["PGOPTIONS"]==""'
+docker compose --env-file "$STAGE/compose.env" -p "$PROJECT" -f "$COMPOSE" -f "$CUTOVER_COMPOSE" up -d --no-deps --force-recreate candidate
+test "$(docker inspect issue15-osaka-prod-candidate-1 --format '{{range .Mounts}}{{if eq .Destination "/app/storage"}}{{.RW}}{{end}}{{end}}')" = true
+docker exec issue15-osaka-prod-candidate-1 sh -c 'test -z "$PGOPTIONS"'
+curl --silent --show-error --noproxy '*' --max-time 10 --max-redirs 0 --output /dev/null --write-out 'capabilities=%{http_code}\n' http://127.0.0.1:3003/api/0.6/capabilities.json
+test "$(systemctl is-active cloudflared)" = active
 sudo python3 deploy/osaka-rails-production/switch_tunnel_route.py candidate /etc/cloudflared/config.yml
-sudo systemctl restart cloudflared
+if ! sudo systemctl restart cloudflared || ! sudo systemctl is-active --quiet cloudflared; then
+  sudo python3 deploy/osaka-rails-production/switch_tunnel_route.py rollback /etc/cloudflared/config.yml
+  sudo systemctl restart cloudflared
+  exit 1
+fi
 sudo systemctl is-active cloudflared
 cloudflared tunnel --config /etc/cloudflared/config.yml ingress validate
 ```

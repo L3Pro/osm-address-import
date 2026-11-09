@@ -1,4 +1,8 @@
-# Candidate only. This file never recreates the existing Osaka web or DB services.
+# Pre-cutover candidate: storage is read-only and PostgreSQL sessions default
+# to read-only. The existing DB role still has write privileges, so this is an
+# operational guard, not a database security boundary. Start only after approval.
+# Write-enabled cutover requires compose.cutover.yml.
+# This file never recreates the existing Osaka web or DB services.
 services:
   candidate:
     image: ${OSM_RAILS_IMAGE:?pin the local Rails image digest}
@@ -10,10 +14,11 @@ services:
       RACK_ENV: production
       RAILS_SERVE_STATIC_FILES: "true"
       RAILS_LOG_LEVEL: info
+      PGOPTIONS: "-c default_transaction_read_only=on"
     volumes:
       - ${OSM_APP_COPY:?private app copy required}:/app
       - ${OSM_SETTINGS_LOCAL_FILE:?existing private settings required}:/app/config/settings.local.yml:ro
-      - existing-storage:/app/storage
+      - existing-storage:/app/storage:ro
     ports:
       - "127.0.0.1:3003:3000"
     networks: [osaka]

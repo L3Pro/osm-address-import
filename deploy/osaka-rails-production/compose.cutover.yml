@@ -1,0 +1,8 @@
+# Apply only after explicit approval to let the candidate serve real sandbox traffic.
+# Compose merges volumes by target path, replacing the base read-only storage mount.
+services:
+  candidate:
+    environment:
+      PGOPTIONS: ""
+    volumes:
+      - existing-storage:/app/storage:rw

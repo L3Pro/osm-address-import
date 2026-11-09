@@ -1,6 +1,12 @@
 import importlib.util
+import fcntl
+import os
 from pathlib import Path
+import stat
+import sys
+import tempfile
 import unittest
+from unittest.mock import patch
 
 
 SCRIPT = (
@@ -32,6 +38,64 @@ class RouteChangeTest(unittest.TestCase):
         ):
             with self.subTest(config=config), self.assertRaises(ValueError):
                 route.replace_origin(config, route.OLD, route.NEW)
+
+    def test_refuses_a_non_live_target_without_test_flag(self):
+        with patch.object(sys, "argv", ["switch", "candidate", "/tmp/unrelated.yml"]):
+            with self.assertRaises(ValueError):
+                route.main()
+
+    def test_test_flag_cannot_target_live_config(self):
+        with patch.object(sys, "argv", ["switch", "candidate", str(route.LIVE_CONFIG), "--test-config"]):
+            with self.assertRaises(ValueError):
+                route.main()
+
+    def test_atomic_write_restricts_config_permissions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yml"
+            path.write_bytes(b"old")
+            os.chmod(path, 0o644)
+            with patch.object(route, "validate"):
+                route.write_atomically(path, b"new", path.stat(), b"old")
+            self.assertEqual(path.read_bytes(), b"new")
+            self.assertEqual(stat.S_IMODE(path.stat().st_mode), 0o600)
+
+    def test_atomic_write_refuses_a_concurrent_edit(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yml"
+            path.write_bytes(b"old")
+            def external_edit(_temporary):
+                path.write_bytes(b"unrelated change")
+            with patch.object(route, "validate", side_effect=external_edit):
+                with self.assertRaises(RuntimeError):
+                    route.write_atomically(path, b"new", path.stat(), b"old")
+            self.assertEqual(path.read_bytes(), b"unrelated change")
+
+    def test_locked_route_refuses_a_second_switch(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yml"
+            original = b"ingress:\n  - hostname: example.invalid\n    service: http://127.0.0.1:3002\n"
+            path.write_bytes(original)
+            descriptor = os.open(str(path) + ".issue15.lock", os.O_RDWR | os.O_CREAT, 0o600)
+            try:
+                fcntl.flock(descriptor, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                with patch.object(sys, "argv", ["switch", "candidate", str(path), "--test-config"]):
+                    with self.assertRaises(BlockingIOError):
+                        route.main()
+                self.assertEqual(path.read_bytes(), original)
+            finally:
+                os.close(descriptor)
+
+    def test_failed_validation_leaves_route_and_no_backup(self):
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / "config.yml"
+            original = b"ingress:\n  - hostname: example.invalid\n    service: http://127.0.0.1:3002\n"
+            path.write_bytes(original)
+            with patch.object(sys, "argv", ["switch", "candidate", str(path), "--test-config"]):
+                with patch.object(route, "validate", side_effect=[None, RuntimeError("rejected")]):
+                    with self.assertRaises(RuntimeError):
+                        route.main()
+            self.assertEqual(path.read_bytes(), original)
+            self.assertFalse(Path(str(path) + ".issue15-backup").exists())
 
 
 if __name__ == "__main__":
