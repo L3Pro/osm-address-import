@@ -33,46 +33,49 @@ The first DB startup exposed a custom-image requirement for the internal databas
 
 The preceding mode-comparison PR has the comparable 1.099 s development and 0.732 s production warm Box A means. This round is a functional candidate smoke test, not a controlled new performance trial. Browser login, interactive iD map editing, remote tile loading, full OAuth authorization, mail, background jobs, uploads, and a sustained load test were **not** exercised. An API save was deliberately not attempted. The already-running Osaka service was not restarted or reconfigured. Its counts before and after were identical (1,865,425 nodes; 364,226 ways; 4,350 relations; 1,146,865 way tags), its loopback capabilities GET returned 200, and the original archive checksum stayed unchanged. After ownership checks, the disposable project's two containers, one volume, one network, staging copy, logs, and synthetic credentials were removed; label-filtered Docker queries returned no project resources.
 
-## Restricted database provisioning requires separate approval
+## Restricted database provisioning: completed under database-only approval
 
 The preflight account is `osm_rails_preflight_ro`, with a generated password separate from the current application account. The tested, idempotent [provisioner](../deploy/osaka-rails-production/provision_readonly_role.py) creates it with LOGIN, NOSUPERUSER, NOCREATEDB, NOCREATEROLE, NOREPLICATION, NOBYPASSRLS, NOINHERIT and an eight-connection limit; it grants CONNECT, public-schema USAGE and SELECT on exactly nine OSM tables: `changesets`, `current_nodes`, `current_node_tags`, `current_ways`, `current_way_nodes`, `current_way_tags`, `current_relations`, `current_relation_members` and `current_relation_tags`. A separate `issue15_preflight.users` view exposes only `id`, `display_name`, `data_public` and `creation_time` to satisfy Rails' `users.*` map association; the candidate's preflight-only initializer tells ActiveRecord that the view's primary key is `id`. The account has no SELECT on `public.users` or OAuth tables, no sequence/table write privileges and no membership. The provisioner sends only a SCRAM verifier, not plaintext, to PostgreSQL and refuses the original project unless `--allow-osaka` is supplied. This adds a private schema/view to the original DB only after separate approval; cutover disables the initializer and uses the original table.
 
-Three existing PUBLIC ACLs also require change to enforce read-only behavior on PostgreSQL 14: revoke CREATE on schema `public`, TEMPORARY on database `openstreetmap`, and SELECT on PostGIS relations `public.geography_columns`, `public.geometry_columns` and `public.spatial_ref_sys`. These are **database changes** beyond creating the role. The original web uses a superuser and was unaffected by these ACL changes in the isolated test; the original database has **not** been changed. Capture the original database/schema/relation ACLs privately before approved provisioning, and compare them before any rollback.
+Three existing PUBLIC ACLs required change to enforce read-only behavior on PostgreSQL 14: revoke CREATE on schema `public`, TEMPORARY on database `openstreetmap`, and SELECT on PostGIS relations `public.geography_columns`, `public.geometry_columns` and `public.spatial_ref_sys`. These changes were applied under the 2026-11-10 database-only authorization after private ACL and client-impact snapshots. The existing web uses a superuser and still serves identical read-only responses. Compare current ACLs with the private before/after snapshots before any rollback.
 
-The current original host authentication does not prevent a candidate from choosing the existing superuser identity. The tested [HBA helper](../deploy/osaka-rails-production/preflight_hba.py) must prepend these two rules before any candidate starts, with a fixed, unassigned address on the approved private network. The live subnet and proposed address are recorded privately:
+The original broad host authentication rule did not prevent a candidate from choosing the existing superuser identity. The tested [HBA helper](../deploy/osaka-rails-production/preflight_hba.py) prepended these two rules before any candidate startup, with a fixed address on the approved private network. The live subnet and address are recorded privately:
 
 ```text
 host openstreetmap osm_rails_preflight_ro <PREFLIGHT_IP>/32 scram-sha-256
 host all all <PREFLIGHT_IP>/32 reject
 ```
 
-The helper checks the project labels, DB network attachment, address/subnet and rule order; it keeps an exact private mode-0600 HBA backup and reloads PostgreSQL configuration without restarting the service. The original DB's HBA and ACL changes, including `pg_reload_conf()`, **require explicit separate approval**. The reviewed isolated test proved the wrong password and a superuser login from the candidate IP were rejected. No actual Osaka IP or route was changed.
+The helper checks the project labels, DB network attachment, address/subnet and rule order; it keeps an exact private mode-0600 HBA backup and reloads PostgreSQL configuration without restarting the service. The 2026-11-10 database-only authorization covered the original DB's role, ACL and HBA changes, including `pg_reload_conf()`. The wrong password and a superuser login from the reserved IP were rejected on Osaka. No Rails candidate or tunnel route was changed.
 
-After that database-change approval, provision only with a fresh backup, private `STAGE` created by the procedure below, unchanged ownership/ACL snapshot and an unassigned candidate IP. The following commands show the *exact planned changes*; they have **not** been run on Osaka:
+The fixed-IP rules constrain the future candidate at that address. The original HBA's broader trust rule still applies to other network addresses; the restricted role has no write privileges there, but the SCRAM password is not enforced outside the reserved IP. The database has no host port, and only the original web and DB were attached during provisioning. Review any future network attachment or HBA policy expansion separately.
+
+The following reviewed commands were run on Osaka with a generated credential in the private provisioning stage after backup, ownership, ACL, HBA and IP checks. They are retained for audit and disposable tests; **do not run them again as part of the next side-by-side preflight**:
 
 ```sh
 export PREFLIGHT_IP='<approved-unused-IP-from-private-network-plan>'
 python3 deploy/osaka-rails-production/provision_readonly_role.py \
   --container osm-api-sandbox-db-1 --project osm-api-sandbox \
-  --credential-file "$STAGE/preflight-role.password" --allow-osaka
+  --credential-file "$ROLE_STAGE/preflight-role.password" --allow-osaka
 python3 deploy/osaka-rails-production/preflight_hba.py install \
   --container osm-api-sandbox-db-1 --project osm-api-sandbox \
   --network osm-api-sandbox_default --candidate-ip "$PREFLIGHT_IP" \
-  --backup "$STAGE/pg_hba.before" --allow-osaka
+  --backup "$ROLE_STAGE/pg_hba.rollback" --allow-osaka
 ```
 
 For rollback **before any cutover**, stop only the candidate if it exists, then run the HBA helper's `rollback` with the same arguments and backup. It refuses rollback if the file changed since installation. After confirming no preflight-role sessions, ownership or unexpected grants, revoke its grants and drop it; restore the three PUBLIC ACLs only if they still match the captured pre-provisioning state. The exact prior Osaka ACLs inspected for this design were PUBLIC CREATE on `public`, PUBLIC TEMPORARY on `openstreetmap` and PUBLIC SELECT on the three named PostGIS relations. A concurrent ACL/HBA change must be reviewed manually rather than overwritten. The old Rails service on port 3002 stays running throughout.
 
 ## Approved rollout procedure (not executed)
 
-**Current status: technical GO for the restricted role on an isolated restore; NO-GO for original-DB provisioning, side-by-side startup or cutover.** The 2026-11-10 authorized preflight stopped before candidate startup because its database identity could write and the original host authentication policy did not bind it to a restricted role. The new role, fixed-IP HBA guard and production Rails read routes passed only on a disposable restored database; see the [readiness audit](RAILS_DEPLOYMENT_READINESS.md#2026-11-10-restricted-role-isolated-validation). The isolated iD test remains a technical GO for the upstream CDN path when the browser can reach jsDelivr. The intended Cloudflare Access browser path is still unverified.
+**Current status: Osaka database provisioning verified; side-by-side startup and cutover remain unapproved.** The separate restricted role and fixed-IP HBA guard were installed under database-only authorization, and original health/counts remained unchanged; see the [readiness audit](RAILS_DEPLOYMENT_READINESS.md#2026-11-10-original-osaka-database-provisioning). The isolated production Rails read routes and iD editor test remain technical evidence only. The intended Cloudflare Access browser path is still unverified.
 
-The 2026-11-09 fresh-backup audit restored successfully to an isolated database; see [deployment readiness](RAILS_DEPLOYMENT_READINESS.md). Repeat the bounded backup and independent restore if the snapshot is stale at cutover. First confirm host headroom, the active tunnel service manager, and an agreed maintenance/rollback window. **The following Osaka commands remain unexecuted and require the approval boundaries below.** `make_private_env.py` now generates a distinct preflight role password and Rails env in a mode-0700 stage; it does not prompt for the existing application-role password. Keep the entire stage private. Do not run any migration, `db:prepare`, seed, or asset task against the existing checkout.
+The 2026-11-09 fresh-backup audit restored successfully to an isolated database; see [deployment readiness](RAILS_DEPLOYMENT_READINESS.md). Repeat the bounded backup and independent restore if the snapshot is stale at cutover. First confirm host headroom, the active tunnel service manager, and an agreed maintenance/rollback window. **The following candidate and tunnel commands remain unexecuted and require the approval boundaries below.** The restricted role password was already generated and installed. Reuse its existing private `preflight.env`; generating a new one without rotating the database role would break authentication. Keep the entire stage private. Do not run any migration, `db:prepare`, seed, or asset task against the existing checkout.
 
 ```sh
 set -euo pipefail
 umask 077
 export STAGE="$PWD/reports/runs/issue15-osaka-rollout-$(date +%Y%m%d%H%M%S)"
+export ROLE_STAGE='<existing-private-provisioning-stage>'
 export SOURCE=/opt/osm-sandbox/osm-api-sandbox/openstreetmap-website
 export SETTINGS="$SOURCE/config/settings.local.yml"
 export RAILS_IMAGE=sha256:16a161d5016f1158c556bdb9b4aaf359c4fce60b22d5f592bfa47dbe750d1332
@@ -103,14 +106,16 @@ timeout 600 docker compose -p "$RESTORE_PROJECT" -f "$RESTORE_COMPOSE" exec -T d
 docker compose -p "$RESTORE_PROJECT" -f "$RESTORE_COMPOSE" exec -T db psql -X -U postgres -d openstreetmap -Atc 'SELECT (SELECT count(*) FROM current_nodes),(SELECT count(*) FROM current_ways),(SELECT count(*) FROM current_relations),(SELECT count(*) FROM current_way_tags)' > "$STAGE/restore-counts.txt"
 cmp "$STAGE/osaka-counts-before.txt" "$STAGE/restore-counts.txt"
 docker compose -p "$RESTORE_PROJECT" -f "$RESTORE_COMPOSE" down --volumes
-python3 deploy/osaka-rails-production/make_private_env.py "$STAGE/preflight.env" "$STAGE/preflight-role.password"
+test -f "$ROLE_STAGE/preflight.env" && test -f "$ROLE_STAGE/pg_hba.rollback"
+cp "$ROLE_STAGE/preflight.env" "$STAGE/preflight.env"
+chmod 600 "$STAGE/preflight.env"
 bash deploy/osaka-rails-production/build_assets.sh "$STAGE" "$RAILS_IMAGE" "$STAGE/preflight.env" "$SETTINGS" > "$STAGE/assets-build.log" 2>&1
 printf 'OSM_RAILS_IMAGE=%s\nOSM_APP_COPY=%s\nOSM_PRIVATE_ENV_FILE=%s\nOSM_SETTINGS_LOCAL_FILE=%s\nOSM_PREFLIGHT_IP=%s\n' "$RAILS_IMAGE" "$STAGE/app" "$STAGE/preflight.env" "$SETTINGS" "$PREFLIGHT_IP" > "$STAGE/compose.env"
 chmod 600 "$STAGE/compose.env"
 docker compose --env-file "$STAGE/compose.env" -p "$PROJECT" -f "$COMPOSE" config --quiet
 ```
 
-If restore fails, inspect ownership and remove only the disposable restore project; do not continue. After separate approval for the original-DB changes, capture current ACLs privately, run the [role and HBA provisioning commands](#restricted-database-provisioning-requires-separate-approval), and verify the candidate IP is still unassigned. The role and HBA helper each refuse original Osaka use unless their explicit `--allow-osaka` flag is supplied. These changes are **not** authorized by PR review or the prior stopped preflight. Record the ACL snapshot before provisioning:
+If restore fails, inspect ownership and remove only the disposable restore project; do not continue. The database-only role/HBA changes have already been approved and applied. Before a separately approved candidate startup, compare the installed grants and HBA guard with the private after-state snapshot, confirm the reserved IP is unassigned, and stop if they differ. Record a fresh ACL snapshot for the side-by-side audit:
 
 ```sh
 {
@@ -121,7 +126,7 @@ If restore fails, inspect ownership and remove only the disposable restore proje
 chmod 600 "$STAGE/acl.before"
 ```
 
-After that provisioning and a **renewed side-by-side startup approval**, render and check the restricted identity, fixed IP, loopback port, read-only storage and transaction default before `up`. The route remains on 3002. `PGOPTIONS` is defense in depth; the database grants and fixed-IP HBA rules are the actual write boundary.
+After a **renewed side-by-side startup approval**, render and check the restricted identity, fixed IP, loopback port, read-only storage and transaction default before `up`. The route remains on 3002. `PGOPTIONS` is defense in depth; the database grants and fixed-IP HBA rules are the actual write boundary.
 
 ```sh
 docker compose --env-file "$STAGE/compose.env" -p "$PROJECT" -f "$COMPOSE" config --format json | python3 -c 'import json,sys,os,urllib.parse; c=json.load(sys.stdin)["services"]["candidate"]; v=[v for v in c["volumes"] if v["target"]=="/app/storage"]; assert len(v)==1 and v[0]["read_only"] and c["environment"]["PGOPTIONS"]=="-c default_transaction_read_only=on" and urllib.parse.urlparse(c["environment"]["DATABASE_URL"]).username=="osm_rails_preflight_ro" and c["networks"]["osaka"]["ipv4_address"]==os.environ["PREFLIGHT_IP"] and c["ports"][0]["host_ip"]=="127.0.0.1"'
@@ -147,7 +152,7 @@ docker compose --env-file "$STAGE/compose.env" -p "$PROJECT" -f "$COMPOSE" down
 python3 deploy/osaka-rails-production/preflight_hba.py rollback \
   --container osm-api-sandbox-db-1 --project osm-api-sandbox \
   --network osm-api-sandbox_default --candidate-ip "$PREFLIGHT_IP" \
-  --backup "$STAGE/pg_hba.before" --allow-osaka
+  --backup "$ROLE_STAGE/pg_hba.rollback" --allow-osaka
 ```
 
 After reviewing the pre-provisioning ACL snapshot, confirming no candidate sessions or preflight-role ownership, and confirming the private schema still contains only the provisioned view, run this rollback in one transaction as a database administrator. It restores only the PUBLIC grants observed before provisioning; stop if the snapshot differs. The HBA helper separately refuses an exact rollback after any unrelated HBA edit.
