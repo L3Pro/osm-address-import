@@ -174,15 +174,47 @@ GRANT SELECT ON TABLE public.geography_columns, public.geometry_columns,
 COMMIT;
 ```
 
-**Cutover approval is separate from DB provisioning, PR review and read-only side-by-side startup.** It would authorize a separate writable credential file, a different unused candidate IP, writable storage/DB access, and then a tunnel-origin change. Review the writable cutover IP's authentication policy as part of that approval. The following remains an unexecuted draft. First render both Compose files and verify the cutover URL, distinct IP, writable storage and cleared `PGOPTIONS`. The tunnel helper validates a private temporary file, locks cooperating invocations, rejects a concurrent content change, creates a mode-600 backup, and replaces only the expected origin line with mode-600 permissions. It does **not** restart the tunnel. If the tunnel restart fails, restore the prior route and retry the old tunnel before leaving the maintenance window.
+## Exact cutover sequence for the running candidate
+
+**This sequence is prepared but not authorized or executed.** The existing read-only candidate on port 3003 uses the private stage created during the successful side-by-side preflight. Reuse that stage; do not rerun source preparation or role provisioning. The 2026-11-10 bounded backup (81,594,313 bytes) restored independently with exact original counts, and a disposable production Rails instance passed synthetic login, secure session, OAuth bearer read, one changeset/node API write and writable storage. All synthetic resources and credentials were removed. The backup is still on the same host; off-host recovery is unverified. Refresh its backup/restore evidence if cutover is delayed, and decide whether this recovery limit is acceptable.
+
+The writable override retains only the candidate service, loopback port 3003 and 1 GiB/1 CPU cap. It replaces the candidate with the existing `openstreetmap` superuser identity, a distinct currently unassigned IP and writable original storage; it disables the preflight-only initializer and `PGOPTIONS`. The old web and DB are absent from the rendered Compose and remain on their existing project. **The existing HBA trust rule accepts this writable IP without checking the supplied password.** That matches the old web's database posture but requires explicit acceptance or a separately approved cutover-IP SCRAM rule. No existing DB credential or HBA rule was changed during this audit.
+
+Before a separately approved cutover, verify the pinned source/image, current candidate and old-service health, original counts, fresh backup, volume/network ownership, HBA policy and unused distinct IP. The private operator audit holds the exact current stage and addresses; keep password, rendered Compose and backup files out of Git. The commands below are the reviewed sequence once those checks pass. The generator prompts for the **existing** application-role password and writes a mode-0600 file. The tunnel helper validates a private temporary config, locks cooperating invocations, rejects concurrent edits, creates a mode-0600 backup and changes only the expected origin line. It does not restart the tunnel.
 
 ```sh
-export CUTOVER_IP='<approved-distinct-unused-cutover-IP>'
+export STAGE="$PWD/reports/runs/issue15-osaka-sidebyside-20261110/candidate"
+export BACKUP_STAGE="$PWD/reports/runs/issue15-cutover-readiness-20261110"
+export PROJECT=issue15-osaka-prod
+export COMPOSE=deploy/osaka-rails-production/compose.rollout.yml
+export CUTOVER_COMPOSE=deploy/osaka-rails-production/compose.cutover.yml
+export SETTINGS=/opt/osm-sandbox/osm-api-sandbox/openstreetmap-website/config/settings.local.yml
+export RAILS_IMAGE=sha256:16a161d5016f1158c556bdb9b4aaf359c4fce60b22d5f592bfa47dbe750d1332
+export PREFLIGHT_IP='<existing-private-guarded-IP>'
+export CUTOVER_IP='<reviewed-distinct-unused-IP>'
+export OSAKA_SUBNET="$(docker network inspect osm-api-sandbox_default --format '{{range .IPAM.Config}}{{.Subnet}}{{end}}')"
+python3 - "$PREFLIGHT_IP" "$CUTOVER_IP" "$OSAKA_SUBNET" <<'PY'
+import ipaddress, sys
+preflight, cutover = (ipaddress.IPv4Address(value) for value in sys.argv[1:3])
+assert preflight != cutover
+subnet = ipaddress.IPv4Network(sys.argv[3])
+assert preflight in subnet and cutover in subnet
+PY
+test "$(docker inspect issue15-osaka-prod-candidate-1 --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')" = "$PREFLIGHT_IP"
+sha256sum -c "$BACKUP_STAGE/archive.sha256"
+test "$(docker compose --env-file "$STAGE/compose.env" -p "$PROJECT" -f "$COMPOSE" config --services)" = candidate
+test -z "$(docker network inspect osm-api-sandbox_default --format '{{range $id,$c := .Containers}}{{println $c.IPv4Address}}{{end}}' | rg "^$CUTOVER_IP/")"
+```
+
+Recheck and snapshot the seven original OSM/user/OAuth counts and both original container identities immediately before the next block. If any prerequisite differs, stop before candidate recreation. The current candidate will pause on port 3003 during recreation, while the old public service continues on port 3002.
+
+```sh
 python3 deploy/osaka-rails-production/make_cutover_env.py "$STAGE/cutover.env"
 printf 'OSM_RAILS_IMAGE=%s\nOSM_APP_COPY=%s\nOSM_PRIVATE_ENV_FILE=%s\nOSM_SETTINGS_LOCAL_FILE=%s\nOSM_PREFLIGHT_IP=%s\nOSM_CUTOVER_IP=%s\n' "$RAILS_IMAGE" "$STAGE/app" "$STAGE/cutover.env" "$SETTINGS" "$PREFLIGHT_IP" "$CUTOVER_IP" > "$STAGE/compose.cutover.env"
 chmod 600 "$STAGE/compose.cutover.env"
+test "$(docker compose --env-file "$STAGE/compose.cutover.env" -p "$PROJECT" -f "$COMPOSE" -f "$CUTOVER_COMPOSE" config --services)" = candidate
 docker compose --env-file "$STAGE/compose.cutover.env" -p "$PROJECT" -f "$COMPOSE" -f "$CUTOVER_COMPOSE" config --format json | python3 -c 'import json,sys,os,urllib.parse; c=json.load(sys.stdin)["services"]["candidate"]; v=[v for v in c["volumes"] if v["target"]=="/app/storage"]; assert len(v)==1 and not v[0].get("read_only",False) and c["environment"]["PGOPTIONS"]=="" and urllib.parse.urlparse(c["environment"]["DATABASE_URL"]).username=="openstreetmap" and c["networks"]["osaka"]["ipv4_address"]==os.environ["CUTOVER_IP"] and os.environ["CUTOVER_IP"]!=os.environ["PREFLIGHT_IP"]'
-docker compose --env-file "$STAGE/compose.cutover.env" -p "$PROJECT" -f "$COMPOSE" -f "$CUTOVER_COMPOSE" up -d --no-deps --force-recreate candidate
+docker compose --env-file "$STAGE/compose.cutover.env" -p "$PROJECT" -f "$COMPOSE" -f "$CUTOVER_COMPOSE" up -d --no-deps --force-recreate --wait --wait-timeout 180 candidate
 test "$(docker inspect issue15-osaka-prod-candidate-1 --format '{{range .Mounts}}{{if eq .Destination "/app/storage"}}{{.RW}}{{end}}{{end}}')" = true
 docker exec issue15-osaka-prod-candidate-1 sh -c 'test -z "$PGOPTIONS"'
 curl --silent --show-error --noproxy '*' --max-time 10 --max-redirs 0 --output /dev/null --write-out 'capabilities=%{http_code}\n' http://127.0.0.1:3003/api/0.6/capabilities.json
@@ -197,7 +229,7 @@ sudo systemctl is-active cloudflared
 cloudflared tunnel --config /etc/cloudflared/config.yml ingress validate
 ```
 
-Use the normal HTTPS sandbox hostname to verify root page, login with a dedicated test account, secure session cookie, `/edit?editor=id`, iD frame, browser console/network asset requests, map data, OAuth-backed user details, and existing read-only API endpoints. Require the actual iD interface, map, zoom, feature selection and tagging controls to render; confirm successful tagging-schema and name-suggestion requests to `cdn.jsdelivr.net` rather than relying on iframe HTML alone. Verify public HTTPS, `Host`/forwarded scheme and CSP behavior. Do not save an OSM edit as part of this rollout. Monitor 5xx, p50/p95 Box A timings, Rails/DB CPU, RSS, and old/new container health for at least ten minutes. Keep the old web running on 3002 during the rollback window.
+Use the normal HTTPS sandbox hostname to verify root page, login with a dedicated test account, secure session cookie, `/edit?editor=id`, iD frame, browser console/network asset requests, map data, OAuth-backed user details, and existing read-only API endpoints. Require the actual iD interface, map, zoom, feature selection and tagging controls to render; confirm successful tagging-schema and name-suggestion requests to `cdn.jsdelivr.net` rather than relying on iframe HTML alone. Verify public HTTPS, `Host`/forwarded scheme and CSP behavior. Do not save an OSM edit as part of this rollout. Monitor 5xx, p50/p95 Box A timings, Rails/DB CPU, RSS, and old/new container health for at least ten minutes. Keep the old web running on 3002 during the rollback window. The tunnel restart causes a brief, unmeasured public interruption. The new process and signing key require session re-login; a route rollback may require another login.
 
 **Acceptance:** all critical HTML/JS/CSS/iD assets and API checks pass with no unexpected redirects or 404/5xx; Box A digest and 336,634-byte response match; five sequential warm Box A GETs have median at or below 0.85 s and at least 20% lower than five same-condition old-service GETs; candidate stays below its 1 GiB limit without restarts; DB aggregate counts do not change during read-only smoke checks; the tunnel reaches the intended port; dedicated test login and OAuth read succeed after cutover. Treat a 5xx, broken editor, asset miss, insecure cookie/HTTP route, count drift before login, or exceeded latency/memory limit as a rollback trigger. These thresholds are proposed for review, not demonstrated at sustained load.
 
@@ -210,7 +242,7 @@ sudo python3 deploy/osaka-rails-production/switch_tunnel_route.py rollback /etc/
 sudo systemctl restart cloudflared
 sudo systemctl is-active cloudflared
 cloudflared tunnel --config /etc/cloudflared/config.yml ingress validate
-docker compose --env-file "$STAGE/compose.env" -p "$PROJECT" -f "$COMPOSE" down
+docker compose --env-file "$STAGE/compose.cutover.env" -p "$PROJECT" -f "$COMPOSE" -f "$CUTOVER_COMPOSE" down
 ```
 
-No database migration, schema change, OSM object write, or change to the old web is part of this proposal, so tunnel rollback returns traffic to the old service. Normal user account/session writes after an approved cutover are not undone by a route rollback. Before executing any rollout, confirm the latest source/image still matches the pinned revisions and that the private backup and tunnel manager can be operated on the real host.
+No database migration, schema change, planned OSM API edit, or change to the old web is part of this procedure, so tunnel rollback returns traffic to the old service. Normal user account, OAuth and OSM edits after an approved cutover are not undone by a route rollback. Before executing any rollout, confirm the latest source/image still matches the pinned revisions and that the private backup and tunnel manager can be operated on the real host.
