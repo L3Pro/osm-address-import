@@ -63,13 +63,13 @@ python3 deploy/osaka-rails-production/preflight_hba.py install \
   --backup "$ROLE_STAGE/pg_hba.rollback" --allow-osaka
 ```
 
-For rollback **before any cutover**, stop only the candidate if it exists, then run the HBA helper's `rollback` with the same arguments and backup. It refuses rollback if the file changed since installation. After confirming no preflight-role sessions, ownership or unexpected grants, revoke its grants and drop it; restore the three PUBLIC ACLs only if they still match the captured pre-provisioning state. The exact prior Osaka ACLs inspected for this design were PUBLIC CREATE on `public`, PUBLIC TEMPORARY on `openstreetmap` and PUBLIC SELECT on the three named PostGIS relations. A concurrent ACL/HBA change must be reviewed manually rather than overwritten. The old Rails service on port 3002 stays running throughout.
+For a failed side-by-side check **before any cutover**, stop only the candidate; leave the installed role, ACLs and HBA guard intact for review. A separately approved database rollback would use the HBA helper's exact-content rollback after the candidate IP is free, then inspect sessions, ownership and grants before dropping the role/view and restoring the prior PUBLIC ACLs. The exact prior Osaka ACLs were PUBLIC CREATE on `public`, PUBLIC TEMPORARY on `openstreetmap` and PUBLIC SELECT on the three named PostGIS relations. A concurrent ACL/HBA change must be reviewed manually rather than overwritten. The old Rails service on port 3002 stays running throughout.
 
-## Approved rollout procedure (not executed)
+## Completed side-by-side preflight and unapproved cutover procedure
 
-**Current status: Osaka database provisioning verified; side-by-side startup and cutover remain unapproved.** The separate restricted role and fixed-IP HBA guard were installed under database-only authorization, and original health/counts remained unchanged; see the [readiness audit](RAILS_DEPLOYMENT_READINESS.md#2026-11-10-original-osaka-database-provisioning). The isolated production Rails read routes and iD editor test remain technical evidence only. The intended Cloudflare Access browser path is still unverified.
+**Current status: the approved read-only side-by-side preflight passed; Cloudflare cutover remains unapproved.** The production candidate is healthy on loopback port 3003 with the restricted role and read-only storage, while the original service remains on port 3002. Ten sequential warm requests per service showed Box A median 1.083 s on 3002 versus 0.663 s on 3003 (38.8% faster), and Box B 0.393 s versus 0.254 s (35.4% faster), with identical response bytes. No original OSM/user/OAuth count, container identity or HBA change occurred. See the [readiness audit](RAILS_DEPLOYMENT_READINESS.md#2026-11-10-production-rails-side-by-side-result) for methodology, p95, CPU and memory. The intended Cloudflare Access browser path is still unverified.
 
-The 2026-11-09 fresh-backup audit restored successfully to an isolated database; see [deployment readiness](RAILS_DEPLOYMENT_READINESS.md). Repeat the bounded backup and independent restore if the snapshot is stale at cutover. First confirm host headroom, the active tunnel service manager, and an agreed maintenance/rollback window. **The following candidate and tunnel commands remain unexecuted and require the approval boundaries below.** The restricted role password was already generated and installed. Reuse its existing private `preflight.env`; generating a new one without rotating the database role would break authentication. Keep the entire stage private. Do not run any migration, `db:prepare`, seed, or asset task against the existing checkout.
+The 2026-11-09 fresh-backup audit restored successfully to an isolated database; see [deployment readiness](RAILS_DEPLOYMENT_READINESS.md). Repeat the bounded backup and independent restore if the snapshot is stale at cutover. The source preparation, asset build and candidate start steps below were executed in a separate private stage for the approved preflight; they are retained as a repeatable reference, **not instructions to recreate the running candidate**. The tunnel and writable cutover commands remain unexecuted and require separate approval. The restricted role password was already generated and installed. Reuse its existing private `preflight.env`; generating a new one without rotating the database role would break authentication. Keep the entire stage private. Do not run any migration, `db:prepare`, seed, or asset task against the existing checkout.
 
 ```sh
 set -euo pipefail
@@ -126,7 +126,7 @@ If restore fails, inspect ownership and remove only the disposable restore proje
 chmod 600 "$STAGE/acl.before"
 ```
 
-After a **renewed side-by-side startup approval**, render and check the restricted identity, fixed IP, loopback port, read-only storage and transaction default before `up`. The route remains on 3002. `PGOPTIONS` is defense in depth; the database grants and fixed-IP HBA rules are the actual write boundary.
+The bounded side-by-side startup approval covered this step, which was executed after the restricted identity, fixed IP, loopback port, read-only storage and transaction default passed rendered and runtime checks. The route remains on 3002. `PGOPTIONS` is defense in depth; the database grants and fixed-IP HBA rules are the actual write boundary. Do not rerun `up` against the healthy candidate unless a separately reviewed recovery calls for it.
 
 ```sh
 docker compose --env-file "$STAGE/compose.env" -p "$PROJECT" -f "$COMPOSE" config --format json | python3 -c 'import json,sys,os,urllib.parse; c=json.load(sys.stdin)["services"]["candidate"]; v=[v for v in c["volumes"] if v["target"]=="/app/storage"]; assert len(v)==1 and v[0]["read_only"] and c["environment"]["PGOPTIONS"]=="-c default_transaction_read_only=on" and urllib.parse.urlparse(c["environment"]["DATABASE_URL"]).username=="osm_rails_preflight_ro" and c["networks"]["osaka"]["ipv4_address"]==os.environ["PREFLIGHT_IP"] and c["ports"][0]["host_ip"]=="127.0.0.1"'
@@ -145,10 +145,15 @@ docker exec -e PGOPTIONS='-c default_transaction_read_only=on' osm-api-sandbox-d
 cmp "$STAGE/osaka-counts-before.txt" "$STAGE/osaka-counts-after.txt"
 ```
 
-If the side-by-side checks fail **before any cutover**, stop only this candidate project. The old service remains on 3002. Then, under the same approved database-change scope, restore the exact HBA backup after confirming the fixed preflight IP is unassigned:
+If a side-by-side check fails **before any cutover**, stop only this candidate project. The old service remains on 3002. The current preflight authorization does not include changing HBA or grants. Preserve the installed database guard for review; any later database rollback requires checking the private before/after snapshots and its own approval boundary.
 
 ```sh
 docker compose --env-file "$STAGE/compose.env" -p "$PROJECT" -f "$COMPOSE" down
+```
+
+If a separate database rollback is approved, confirm the candidate is stopped, the reserved IP is unassigned and the HBA file still equals the installed snapshot before using the exact private rollback file:
+
+```sh
 python3 deploy/osaka-rails-production/preflight_hba.py rollback \
   --container osm-api-sandbox-db-1 --project osm-api-sandbox \
   --network osm-api-sandbox_default --candidate-ip "$PREFLIGHT_IP" \
