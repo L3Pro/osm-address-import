@@ -62,6 +62,13 @@ production:
   encoding: utf8
   url: <%= ENV.fetch("DATABASE_URL") %>
 YAML
+cat > "$stage/app/config/initializers/issue15_preflight_user_pk.rb" <<'RUBY'
+# The read-only preflight account resolves users through a minimal view without
+# PostgreSQL primary-key metadata. Keep this override out of writable cutover.
+Rails.application.config.to_prepare do
+  User.primary_key = "id" if ENV["OSM_RAILS_READONLY_PREFLIGHT"] == "true"
+end
+RUBY
 mkdir -p -- "$stage/app/tmp" "$stage/app/storage"
 printf '%s\n' "$expected_revision" > "$stage/source-revision"
 echo "Prepared isolated source copy at $stage/app"

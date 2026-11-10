@@ -2,7 +2,14 @@
 # Compose merges volumes by target path, replacing the base read-only storage mount.
 services:
   candidate:
+    # A separately approved cutover env must replace OSM_PRIVATE_ENV_FILE.
+    # A distinct IP must bypass the preflight-only PostgreSQL reject rule.
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
     environment:
+      OSM_RAILS_READONLY_PREFLIGHT: "false"
       PGOPTIONS: ""
     volumes:
       - existing-storage:/app/storage:rw
+    networks:
+      osaka:
+        ipv4_address: ${OSM_CUTOVER_IP:?pin a separate cutover IP}

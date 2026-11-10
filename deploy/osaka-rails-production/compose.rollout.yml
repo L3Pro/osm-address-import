@@ -1,12 +1,13 @@
-# Pre-cutover candidate: storage is read-only and PostgreSQL sessions default
-# to read-only. The existing DB role still has write privileges, so this is an
-# operational guard, not a database security boundary. Start only after approval.
+# Pre-cutover candidate: restricted database identity, fixed Docker source IP,
+# read-only storage and read-only transaction default. PostgreSQL must first
+# authenticate only this role from OSM_PREFLIGHT_IP and reject all other roles
+# from that IP. Start on Osaka only after separate provisioning/preflight approval.
 # Write-enabled cutover requires compose.cutover.yml.
 # This file never recreates the existing Osaka web or DB services.
 services:
   candidate:
     image: ${OSM_RAILS_IMAGE:?pin the local Rails image digest}
-    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
+    command: ["/bin/sh", "-ec", "case \"$$DATABASE_URL\" in postgresql://osm_rails_preflight_ro:*) ;; *) echo 'restricted preflight database URL required' >&2; exit 1;; esac; exec bundle exec rails s -p 3000 -b 0.0.0.0"]
     working_dir: /app
     env_file: ${OSM_PRIVATE_ENV_FILE:?private env file required}
     environment:
@@ -14,6 +15,7 @@ services:
       RACK_ENV: production
       RAILS_SERVE_STATIC_FILES: "true"
       RAILS_LOG_LEVEL: info
+      OSM_RAILS_READONLY_PREFLIGHT: "true"
       PGOPTIONS: "-c default_transaction_read_only=on"
     volumes:
       - ${OSM_APP_COPY:?private app copy required}:/app
@@ -21,7 +23,9 @@ services:
       - existing-storage:/app/storage:ro
     ports:
       - "127.0.0.1:3003:3000"
-    networks: [osaka]
+    networks:
+      osaka:
+        ipv4_address: ${OSM_PREFLIGHT_IP:?pin the HBA-guarded candidate IP}
     mem_limit: 1024m
     cpus: 1.0
     healthcheck:
