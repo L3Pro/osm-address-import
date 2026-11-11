@@ -69,7 +69,7 @@ For a failed side-by-side check **before any cutover**, stop only the candidate;
 
 **Current status: the approved read-only side-by-side preflight passed; Cloudflare cutover remains unapproved.** The production candidate is healthy on loopback port 3003 with the restricted role and read-only storage, while the original service remains on port 3002. Ten sequential warm requests per service showed Box A median 1.083 s on 3002 versus 0.663 s on 3003 (38.8% faster), and Box B 0.393 s versus 0.254 s (35.4% faster), with identical response bytes. No original OSM/user/OAuth count, container identity or HBA change occurred. See the [readiness audit](RAILS_DEPLOYMENT_READINESS.md#2026-11-10-production-rails-side-by-side-result) for methodology, p95, CPU and memory. The intended Cloudflare Access browser path is still unverified.
 
-The 2026-11-09 fresh-backup audit restored successfully to an isolated database; see [deployment readiness](RAILS_DEPLOYMENT_READINESS.md). Repeat the bounded backup and independent restore if the snapshot is stale at cutover. The source preparation, asset build and candidate start steps below were executed in a separate private stage for the approved preflight; they are retained as a repeatable reference, **not instructions to recreate the running candidate**. The tunnel and writable cutover commands remain unexecuted and require separate approval. The restricted role password was already generated and installed. Reuse its existing private `preflight.env`; generating a new one without rotating the database role would break authentication. Keep the entire stage private. Do not run any migration, `db:prepare`, seed, or asset task against the existing checkout.
+The 2026-11-09 backup and restore audit remains historical evidence; see [deployment readiness](RAILS_DEPLOYMENT_READINESS.md#osaka-sandbox-recovery-policy--2026-11-11). Under the owner's disposable-sandbox policy, no fresh backup, off-host copy or independent restore is required for this deployment. Preserve existing backups. The source preparation, asset build and candidate start steps below were executed in a separate private stage for the approved preflight; they are retained as a repeatable reference, **not instructions to recreate the running candidate**. The tunnel and writable cutover commands remain unexecuted and require separate approval. The restricted role password was already generated and installed. Reuse its existing private `preflight.env`; generating a new one without rotating the database role would break authentication. Keep the entire stage private. Do not run any migration, `db:prepare`, seed, or asset task against the existing checkout.
 
 ```sh
 set -euo pipefail
@@ -81,31 +81,17 @@ export SETTINGS="$SOURCE/config/settings.local.yml"
 export RAILS_IMAGE=sha256:16a161d5016f1158c556bdb9b4aaf359c4fce60b22d5f592bfa47dbe750d1332
 export COMPOSE=deploy/osaka-rails-production/compose.rollout.yml
 export CUTOVER_COMPOSE=deploy/osaka-rails-production/compose.cutover.yml
-export RESTORE_COMPOSE=deploy/osaka-rails-production/compose.restore.yml
-export OSM_DB_IMAGE=sha256:7e04bfcf1b20b7ccd558f1977e9f08f72c5683b4b59b021a127cbe370a7ee574
 export PROJECT=issue15-osaka-prod
-export RESTORE_PROJECT=issue15-precutover-restore-$(date +%Y%m%d%H%M%S)
 export PREFLIGHT_IP='<approved-unused-IP-from-private-network-plan>'
 
 docker ps --filter label=com.docker.compose.project=osm-api-sandbox --format '{{.Names}} {{.Status}}'
 docker network inspect osm-api-sandbox_default --format '{{index .Labels "com.docker.compose.project"}}'
 docker volume inspect osm-api-sandbox_web-storage --format '{{index .Labels "com.docker.compose.project"}}'
-sha256sum /opt/osm-sandbox/osm-api-sandbox/backups/imported-osaka-core-test-20260619-212052.dump
 test "$(systemctl is-active cloudflared)" = active
 cloudflared tunnel --config /etc/cloudflared/config.yml ingress validate
 
 bash deploy/osaka-rails-production/prepare_candidate.sh "$SOURCE" "$STAGE" osm-api-sandbox-web-1
 docker exec -e PGOPTIONS='-c default_transaction_read_only=on' osm-api-sandbox-db-1 psql -X -U openstreetmap -d openstreetmap -Atc 'SELECT (SELECT count(*) FROM current_nodes),(SELECT count(*) FROM current_ways),(SELECT count(*) FROM current_relations),(SELECT count(*) FROM current_way_tags)' > "$STAGE/osaka-counts-before.txt"
-timeout 600 docker exec -e PGOPTIONS='-c default_transaction_read_only=on' osm-api-sandbox-db-1 pg_dump -U openstreetmap -d openstreetmap -Fc --no-owner --no-acl --lock-wait-timeout=5s > "$STAGE/current-precutover.dump"
-docker exec -i osm-api-sandbox-db-1 pg_restore --list < "$STAGE/current-precutover.dump" > "$STAGE/current-precutover.list"
-test -s "$STAGE/current-precutover.list"
-sha256sum "$STAGE/current-precutover.dump" > "$STAGE/current-precutover.sha256"
-test -z "$(docker ps -aq --filter label=com.docker.compose.project=$RESTORE_PROJECT)"
-docker compose -p "$RESTORE_PROJECT" -f "$RESTORE_COMPOSE" up -d --wait db
-timeout 600 docker compose -p "$RESTORE_PROJECT" -f "$RESTORE_COMPOSE" exec -T db pg_restore -U postgres --no-owner --no-acl --exit-on-error -d openstreetmap < "$STAGE/current-precutover.dump"
-docker compose -p "$RESTORE_PROJECT" -f "$RESTORE_COMPOSE" exec -T db psql -X -U postgres -d openstreetmap -Atc 'SELECT (SELECT count(*) FROM current_nodes),(SELECT count(*) FROM current_ways),(SELECT count(*) FROM current_relations),(SELECT count(*) FROM current_way_tags)' > "$STAGE/restore-counts.txt"
-cmp "$STAGE/osaka-counts-before.txt" "$STAGE/restore-counts.txt"
-docker compose -p "$RESTORE_PROJECT" -f "$RESTORE_COMPOSE" down --volumes
 test -f "$ROLE_STAGE/preflight.env" && test -f "$ROLE_STAGE/pg_hba.rollback"
 cp "$ROLE_STAGE/preflight.env" "$STAGE/preflight.env"
 chmod 600 "$STAGE/preflight.env"
@@ -115,7 +101,7 @@ chmod 600 "$STAGE/compose.env"
 docker compose --env-file "$STAGE/compose.env" -p "$PROJECT" -f "$COMPOSE" config --quiet
 ```
 
-If restore fails, inspect ownership and remove only the disposable restore project; do not continue. The database-only role/HBA changes have already been approved and applied. Before a separately approved candidate startup, compare the installed grants and HBA guard with the private after-state snapshot, confirm the reserved IP is unassigned, and stop if they differ. Record a fresh ACL snapshot for the side-by-side audit:
+The database-only read-only role/HBA changes have already been approved and applied. Before a separately approved candidate startup, compare the installed grants and HBA guard with the private after-state snapshot, confirm the reserved IP is unassigned, and stop if they differ. Record a fresh ACL snapshot for the side-by-side audit:
 
 ```sh
 {
@@ -176,17 +162,16 @@ COMMIT;
 
 ## Exact cutover sequence for the running candidate
 
-**This sequence is prepared but not authorized or executed.** The existing read-only candidate on port 3003 uses the private stage created during the successful side-by-side preflight. Reuse that stage; do not rerun source preparation or read-only role provisioning. The 2026-11-10 bounded backup (81,594,313 bytes) restored independently with exact original counts. The 2026-11-11 isolated production Rails test used the dedicated `osm_rails_cutover_rw` role and passed CSRF login, secure session, authenticated editor/iD routes, OAuth bearer read, changeset and synthetic node creation/readback/closure, and writable storage. Unauthorized DDL, migrations, role escalation and reads outside the grants failed. The backup is still on the same host; no approved off-host destination was found. Refresh its backup/restore evidence if cutover is delayed and explicitly decide whether same-host-only recovery is acceptable.
+**This sequence is prepared but not authorized or executed.** The existing read-only candidate on port 3003 uses the private stage created during the successful side-by-side preflight. Reuse that stage; do not rerun source preparation or read-only role provisioning. The 2026-11-11 isolated production Rails test used the dedicated `osm_rails_cutover_rw` role and passed CSRF login, secure session, authenticated editor/iD routes, OAuth bearer read, changeset and synthetic node creation/readback/closure, and writable storage. Unauthorized DDL, migrations, role escalation and reads outside the grants failed. Osaka is a disposable sandbox: the owner accepts loss of sandbox-only data on rebuild, and no fresh backup, off-host copy or independent restore is required for this deployment. Preserve existing backups. Exact HBA and Rails traffic rollback remain required.
 
 The writable override retains only the candidate service, loopback port 3003 and 1 GiB/1 CPU cap. It requires the separately provisioned `osm_rails_cutover_rw` role, a distinct currently unassigned IP with SCRAM and role-wide IPv4/IPv6/local reject rules ahead of legacy `trust`, and writable original storage; it disables the preflight-only initializer and `PGOPTIONS`. Other roles from the candidate IP are rejected. The old web and DB are absent from the rendered Compose and remain on their existing project. The legacy `trust` rule remains unchanged for existing clients; the new role cannot fall through to it from another IP. The existing `openstreetmap` superuser and its password are not used for the writable candidate. No live database grant, credential or HBA change was made during this audit.
 
-Before a separately approved cutover, verify the pinned source/image, current candidate and old-service health, original counts, fresh backup, volume/network ownership, HBA policy and unused distinct client IPs. The private operator audit holds the exact current stage and addresses; keep password, rendered Compose and backup files out of Git. **Live writable-role provisioning and HBA installation require their own explicit approval before candidate recreation.** Generate a new role password in a private 0700 stage; provision the role and guard only after comparing current roles, grants, HBA and clients with the reviewed baseline. Test correct/wrong passwords from the candidate IP, superuser rejection there, and the new role's rejection from another IP and local socket before proceeding. The tunnel helper validates a private temporary config, locks cooperating invocations, rejects concurrent edits, creates a mode-0600 backup and changes only the expected origin line. It does not restart the tunnel.
+Before a separately approved cutover, verify the pinned source/image, current candidate and old-service health, original counts, volume/network ownership, HBA policy and unused distinct client IPs. The private operator audit holds the exact current stage and addresses; keep credentials, rendered Compose and HBA rollback files out of Git. **Live writable-role provisioning and HBA installation require their own explicit approval before candidate recreation.** Generate a new role password in a private 0700 stage; provision the role and guard only after comparing current roles, grants, HBA and clients with the reviewed baseline. Test correct/wrong passwords from the candidate IP, superuser rejection there, and the new role's rejection from another IP and local socket before proceeding. The tunnel helper validates a private temporary config, locks cooperating invocations, rejects concurrent edits, creates a mode-0600 backup and changes only the expected origin line. It does not restart the tunnel.
 
 ```sh
 set -euo pipefail
 umask 077
 export STAGE="$PWD/reports/runs/issue15-osaka-sidebyside-20261110/candidate"
-export BACKUP_STAGE="$PWD/reports/runs/issue15-cutover-readiness-20261110"
 export PROJECT=issue15-osaka-prod
 export COMPOSE=deploy/osaka-rails-production/compose.rollout.yml
 export CUTOVER_COMPOSE=deploy/osaka-rails-production/compose.cutover.yml
@@ -204,7 +189,6 @@ subnet = ipaddress.IPv4Network(sys.argv[4])
 assert all(address in subnet for address in (preflight, cutover, other))
 PY
 test "$(docker inspect issue15-osaka-prod-candidate-1 --format '{{range .NetworkSettings.Networks}}{{.IPAddress}}{{end}}')" = "$PREFLIGHT_IP"
-sha256sum -c "$BACKUP_STAGE/archive.sha256"
 test "$(docker compose --env-file "$STAGE/compose.env" -p "$PROJECT" -f "$COMPOSE" config --services)" = candidate
 test -z "$(docker network inspect osm-api-sandbox_default --format '{{range $id,$c := .Containers}}{{println $c.IPv4Address}}{{end}}' | rg -F "$CUTOVER_IP/")"
 test -z "$(docker network inspect osm-api-sandbox_default --format '{{range $id,$c := .Containers}}{{println $c.IPv4Address}}{{end}}' | rg -F "$OTHER_TEST_IP/")"
@@ -300,4 +284,4 @@ cloudflared tunnel --config /etc/cloudflared/config.yml ingress validate
 docker compose --env-file "$STAGE/compose.cutover.env" -p "$PROJECT" -f "$COMPOSE" -f "$CUTOVER_COMPOSE" down
 ```
 
-No database migration, schema change, planned OSM API edit, or change to the old web is part of this procedure, so tunnel rollback returns traffic to the old service. Normal user account, OAuth and OSM edits after an approved cutover are not undone by a route rollback. Before executing any rollout, confirm the latest source/image still matches the pinned revisions and that the private backup and tunnel manager can be operated on the real host.
+No database migration, schema change, planned OSM API edit, or change to the old web is part of this procedure, so tunnel rollback returns traffic to the old service. Normal user account, OAuth and OSM edits after an approved cutover are not undone by a route rollback. Before executing any rollout, confirm the latest source/image still matches the pinned revisions and that the HBA and tunnel rollback files and service manager can be operated on the real host. Existing database backups remain preserved but are not a deployment gate.
