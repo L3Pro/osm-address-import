@@ -5,6 +5,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -39,7 +40,10 @@ class WritableRoleTest(unittest.TestCase):
     def test_cutover_hba_and_live_guard(self):
         lines = hba.block("192.0.2.5").splitlines()
         self.assertEqual(lines[1], "host openstreetmap osm_rails_cutover_rw 192.0.2.5/32 scram-sha-256")
-        self.assertEqual(lines[2], "host all all 192.0.2.5/32 reject")
+        self.assertEqual(lines[2], "host all osm_rails_cutover_rw 0.0.0.0/0 reject")
+        self.assertEqual(lines[3], "host all osm_rails_cutover_rw ::/0 reject")
+        self.assertEqual(lines[4], "local all osm_rails_cutover_rw reject")
+        self.assertEqual(lines[5], "host all all 192.0.2.5/32 reject")
         for script, args in (
             ("cutover_hba.py", ["install", "--container", "osm-api-sandbox-db-1", "--project", "osm-api-sandbox", "--network", "osm-api-sandbox_default", "--candidate-ip", "192.0.2.5", "--backup", "/nonexistent"]),
             ("provision_writable_role.py", ["--container", "osm-api-sandbox-db-1", "--project", "osm-api-sandbox", "--credential-file", "/nonexistent"]),
@@ -47,6 +51,15 @@ class WritableRoleTest(unittest.TestCase):
             run = subprocess.run([sys.executable, str(DEPLOY / script), *args], capture_output=True, text=True)
             self.assertNotEqual(run.returncode, 0)
             self.assertIn("requires separate approval", run.stderr)
+
+    def test_old_two_rule_guard_fails_verification(self):
+        old_rules = (
+            "host|openstreetmap|osm_rails_cutover_rw|192.0.2.5|scram-sha-256\n"
+            "host|all|all|192.0.2.5|reject\n"
+        )
+        with patch.object(hba, "run", return_value=old_rules):
+            with self.assertRaisesRegex(RuntimeError, "missing or out of order"):
+                hba.verify_rules("disposable-db", "192.0.2.5")
 
 
 if __name__ == "__main__":

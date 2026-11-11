@@ -33,6 +33,9 @@ def block(address: str) -> str:
     return (
         f"{BEGIN}\n"
         f"host openstreetmap {ROLE} {ip}/32 scram-sha-256\n"
+        f"host all {ROLE} 0.0.0.0/0 reject\n"
+        f"host all {ROLE} ::/0 reject\n"
+        f"local all {ROLE} reject\n"
         f"host all all {ip}/32 reject\n"
         f"{END}\n"
     )
@@ -51,13 +54,19 @@ def write_hba(container: str, content: str) -> None:
 def verify_rules(container: str, address: str) -> None:
     query = (
         "SELECT type||'|'||array_to_string(database,',')||'|'||"
-        "array_to_string(user_name,',')||'|'||address||'|'||auth_method "
-        "FROM pg_hba_file_rules WHERE type='host' ORDER BY line_number LIMIT 2"
+        "array_to_string(user_name,',')||'|'||coalesce(address,'')||'|'||auth_method "
+        "FROM pg_hba_file_rules WHERE type IN ('host','local') ORDER BY line_number LIMIT 5"
     )
     actual = run(["docker", "exec", container, "psql", "-X", "-U", "postgres", "-d", "openstreetmap", "-Atc", query]).strip().splitlines()
-    expected = [f"host|openstreetmap|{ROLE}|{address}|scram-sha-256", f"host|all|all|{address}|reject"]
+    expected = [
+        f"host|openstreetmap|{ROLE}|{address}|scram-sha-256",
+        f"host|all|{ROLE}|0.0.0.0|reject",
+        f"host|all|{ROLE}|::|reject",
+        f"local|all|{ROLE}||reject",
+        f"host|all|all|{address}|reject",
+    ]
     if actual != expected:
-        raise RuntimeError("candidate-IP HBA rules are missing or out of order")
+        raise RuntimeError("writable-role HBA rules are missing or out of order")
     errors = run(["docker", "exec", container, "psql", "-X", "-U", "postgres", "-d", "openstreetmap", "-Atc", "SELECT count(*) FROM pg_hba_file_rules WHERE error IS NOT NULL"]).strip()
     if errors != "0":
         raise RuntimeError("PostgreSQL found HBA parse errors")
