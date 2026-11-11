@@ -3,8 +3,8 @@
 services:
   candidate:
     # A separately approved cutover env must replace OSM_PRIVATE_ENV_FILE.
-    # A distinct IP must bypass the preflight-only PostgreSQL reject rule.
-    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
+    # A distinct IP must have its own SCRAM/reject guard before recreation.
+    command: ["/bin/sh", "-ec", "case \"$$DATABASE_URL\" in postgresql://osm_rails_cutover_rw:*) ;; *) echo 'restricted writable database URL required' >&2; exit 1;; esac; exec bundle exec rails s -p 3000 -b 0.0.0.0"]
     environment:
       OSM_RAILS_READONLY_PREFLIGHT: "false"
       PGOPTIONS: ""

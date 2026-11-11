@@ -12,6 +12,7 @@ ROOT = Path(__file__).resolve().parents[1]
 ROLE_SCRIPT = ROOT / "deploy/osaka-rails-production/provision_readonly_role.py"
 ENV_SCRIPT = ROOT / "deploy/osaka-rails-production/make_private_env.py"
 CUTOVER_ENV_SCRIPT = ROOT / "deploy/osaka-rails-production/make_cutover_env.py"
+WRITABLE_CREDENTIAL_SCRIPT = ROOT / "deploy/osaka-rails-production/make_writable_credential.py"
 HBA_SCRIPT = ROOT / "deploy/osaka-rails-production/preflight_hba.py"
 spec = importlib.util.spec_from_file_location("readonly_role", ROLE_SCRIPT)
 module = importlib.util.module_from_spec(spec)
@@ -65,14 +66,21 @@ class ReadonlyRoleTest(unittest.TestCase):
     def test_cutover_credential_has_a_separate_private_file(self):
         with tempfile.TemporaryDirectory() as directory:
             path = Path(directory) / "cutover.env"
+            credential = Path(directory) / "role.password"
+            generated = subprocess.run(
+                [sys.executable, str(WRITABLE_CREDENTIAL_SCRIPT), str(credential)],
+                capture_output=True, text=True,
+            )
+            self.assertEqual(generated.returncode, 0, generated.stderr)
             run = subprocess.run(
-                [sys.executable, str(CUTOVER_ENV_SCRIPT), str(path)],
-                input="synthetic-only-password\n", capture_output=True, text=True,
+                [sys.executable, str(CUTOVER_ENV_SCRIPT), str(credential), str(path)],
+                capture_output=True, text=True,
             )
             self.assertEqual(run.returncode, 0, run.stderr)
             self.assertEqual(path.stat().st_mode & 0o777, 0o600)
-            self.assertIn("postgresql://openstreetmap:synthetic-only-password@db/openstreetmap", path.read_text())
-            self.assertNotIn("synthetic-only-password", run.stdout)
+            self.assertEqual(credential.stat().st_mode & 0o777, 0o600)
+            self.assertIn("postgresql://osm_rails_cutover_rw:", path.read_text())
+            self.assertNotIn(credential.read_text().strip(), run.stdout)
 
     def test_hba_guard_orders_authenticated_role_before_reject(self):
         lines = hba.block("192.0.2.3").splitlines()
