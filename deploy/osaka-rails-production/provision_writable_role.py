@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Provision the Issue #15 writable candidate role on a disposable database.
+"""Provision the Issue #15 writable candidate role on an approved database.
 
 Original Osaka use requires a separate approval and --allow-osaka. The role
 cannot own objects or perform DDL; no migrations are permitted at cutover.
@@ -17,7 +17,13 @@ from provision_readonly_role import scram_verifier
 
 ROLE = "osm_rails_cutover_rw"
 MARKER = "Issue 15 writable Rails candidate role v1"
-READ_ONLY_TABLES = ("ar_internal_metadata", "schema_migrations", "spatial_ref_sys")
+READ_ONLY_TABLES = (
+    "ar_internal_metadata",
+    "schema_migrations",
+    "spatial_ref_sys",
+    "geography_columns",
+    "geometry_columns",
+)
 
 
 def sql_for(verifier: str) -> str:
@@ -100,7 +106,7 @@ def main() -> int:
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
         print(f"provisioning failed ({type(error).__name__}); transaction rolled back", file=sys.stderr)
         return 1
-    print(f"Provisioned {ROLE} in disposable project {args.project}; verify privileges and authentication")
+    print(f"Provisioned {ROLE} in project {args.project}; verify privileges and authentication")
     return 0
 
 

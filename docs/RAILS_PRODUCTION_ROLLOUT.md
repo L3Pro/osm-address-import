@@ -164,9 +164,9 @@ COMMIT;
 
 **This sequence is prepared but not authorized or executed.** The existing read-only candidate on port 3003 uses the private stage created during the successful side-by-side preflight. Reuse that stage; do not rerun source preparation or read-only role provisioning. The 2026-11-11 isolated production Rails test used the dedicated `osm_rails_cutover_rw` role and passed CSRF login, secure session, authenticated editor/iD routes, OAuth bearer read, changeset and synthetic node creation/readback/closure, and writable storage. Unauthorized DDL, migrations, role escalation and reads outside the grants failed. Osaka is a disposable sandbox: the owner accepts loss of sandbox-only data on rebuild, and no fresh backup, off-host copy or independent restore is required for this deployment. Preserve existing backups. Exact HBA and Rails traffic rollback remain required.
 
-The writable override retains only the candidate service, loopback port 3003 and 1 GiB/1 CPU cap. It requires the separately provisioned `osm_rails_cutover_rw` role, a distinct currently unassigned IP with SCRAM and role-wide IPv4/IPv6/local reject rules ahead of legacy `trust`, and writable original storage; it disables the preflight-only initializer and `PGOPTIONS`. Other roles from the candidate IP are rejected. The old web and DB are absent from the rendered Compose and remain on their existing project. The legacy `trust` rule remains unchanged for existing clients; the new role cannot fall through to it from another IP. The existing `openstreetmap` superuser and its password are not used for the writable candidate. No live database grant, credential or HBA change was made during this audit.
+The writable override retains only the candidate service, loopback port 3003 and 1 GiB/1 CPU cap. It requires the provisioned `osm_rails_cutover_rw` role, the reserved writable IP with SCRAM and role-wide IPv4/IPv6/local reject rules ahead of legacy `trust`, and writable original storage; it disables the preflight-only initializer and `PGOPTIONS`. Other roles from the candidate IP are rejected. The old web and DB are absent from the rendered Compose and remain on their existing project. The legacy `trust` rule remains unchanged for existing clients; the new role cannot fall through to it from another IP. The existing `openstreetmap` superuser and its password are not used for the writable candidate. The role and HBA guard were installed under separate authorization on 2026-11-11; see the private `reports/runs/issue15-osaka-writable-role-20261111` audit. Candidate recreation and tunnel changes remain unapproved.
 
-Before a separately approved cutover, verify the pinned source/image, current candidate and old-service health, original counts, volume/network ownership, HBA policy and unused distinct client IPs. The private operator audit holds the exact current stage and addresses; keep credentials, rendered Compose and HBA rollback files out of Git. **Live writable-role provisioning and HBA installation require their own explicit approval before candidate recreation.** Generate a new role password in a private 0700 stage; provision the role and guard only after comparing current roles, grants, HBA and clients with the reviewed baseline. Test correct/wrong passwords from the candidate IP, superuser rejection there, and the new role's rejection from another IP and local socket before proceeding. The tunnel helper validates a private temporary config, locks cooperating invocations, rejects concurrent edits, creates a mode-0600 backup and changes only the expected origin line. It does not restart the tunnel.
+Before a separately approved cutover, verify the pinned source/image, current candidate and old-service health, original counts, volume/network ownership, installed HBA policy and unused distinct client IPs. The private operator audit holds the exact current stage and addresses; keep credentials, rendered Compose and HBA rollback files out of Git. **Reuse the installed writable role and its existing private credential; do not provision the role or generate a replacement password.** The 2026-11-11 live audit verified correct/wrong passwords from the candidate IP, superuser rejection there, and the new role's rejection from another IP and local socket. The tunnel helper validates a private temporary config, locks cooperating invocations, rejects concurrent edits, creates a mode-0600 backup and changes only the expected origin line. It does not restart the tunnel.
 
 ```sh
 set -euo pipefail
@@ -175,6 +175,7 @@ export STAGE="$PWD/reports/runs/issue15-osaka-sidebyside-20261110/candidate"
 export PROJECT=issue15-osaka-prod
 export COMPOSE=deploy/osaka-rails-production/compose.rollout.yml
 export CUTOVER_COMPOSE=deploy/osaka-rails-production/compose.cutover.yml
+export RW_ROLE_STAGE="$PWD/reports/runs/issue15-osaka-writable-role-20261111"
 export SETTINGS=/opt/osm-sandbox/osm-api-sandbox/openstreetmap-website/config/settings.local.yml
 export RAILS_IMAGE=sha256:16a161d5016f1158c556bdb9b4aaf359c4fce60b22d5f592bfa47dbe750d1332
 export PREFLIGHT_IP='<existing-private-guarded-IP>'
@@ -194,58 +195,36 @@ test -z "$(docker network inspect osm-api-sandbox_default --format '{{range $id,
 test -z "$(docker network inspect osm-api-sandbox_default --format '{{range $id,$c := .Containers}}{{println $c.IPv4Address}}{{end}}' | rg -F "$OTHER_TEST_IP/")"
 ```
 
-Recheck and snapshot the seven original OSM/user/OAuth counts and both original container identities immediately before the next block. If any prerequisite differs, stop before candidate recreation. The current candidate will pause on port 3003 during recreation, while the old public service continues on port 3002.
+Recheck and snapshot the seven original OSM/user/OAuth counts and both original container identities immediately before candidate recreation. If any prerequisite differs, stop before candidate recreation. The current candidate will pause on port 3003 during recreation, while the old public service continues on port 3002.
 
-Under a **separate live database provisioning approval**, create a new private role credential and apply only the reviewed role and HBA guard. The provisioner refuses schema drift, PUBLIC CREATE/TEMP privileges, unexpected role ownership or membership, and an existing unmarked role. The HBA helper refuses a used candidate IP, a mismatched project/network or an unexpected HBA backup. It prepends role-specific SCRAM at the candidate IP, role-wide IPv4/IPv6/local rejects, then a catch-all candidate-IP reject; the existing read-only guard and legacy trust remain byte-for-byte below. The database is reloaded, not restarted. Verify role flags/grants, correct and wrong passwords from the candidate IP, another-role rejection there, writable-role rejection from a separate IP and local socket, and original web health/counts after reload. Do not proceed if any check fails. Roll back only the exact HBA backup after checking for unrelated changes; the new role can remain unused pending review.
+Live provisioning was completed under the separate 2026-11-11 approval. **Do not rerun the credential generator, role provisioner or HBA installer during cutover.** The private audit records the exact commands and rollback file. Before candidate recreation, verify that the existing role, private credential and HBA guard still match the approved state. Stop on any mismatch; never repair drift as part of the traffic cutover.
 
 ```sh
-export RW_ROLE_STAGE="$PWD/reports/runs/issue15-osaka-writable-role-APPROVED-DATE"
-install -d -m 700 "$RW_ROLE_STAGE"
-python3 deploy/osaka-rails-production/make_writable_credential.py "$RW_ROLE_STAGE/role.password"
-python3 deploy/osaka-rails-production/provision_writable_role.py \
-  --container osm-api-sandbox-db-1 --project osm-api-sandbox \
-  --credential-file "$RW_ROLE_STAGE/role.password" --allow-osaka
-python3 deploy/osaka-rails-production/cutover_hba.py install \
-  --container osm-api-sandbox-db-1 --project osm-api-sandbox \
-  --network osm-api-sandbox_default --candidate-ip "$CUTOVER_IP" \
-  --backup "$RW_ROLE_STAGE/pg_hba.rollback" --allow-osaka
+python3 - "$RW_ROLE_STAGE" "$CUTOVER_IP" <<'PY'
+from pathlib import Path
+import importlib.util, stat, subprocess, sys
+stage, ip = Path(sys.argv[1]), sys.argv[2]
+for name in ('role.password', 'pg_hba.rollback'):
+    path = stage / name
+    assert path.is_file() and not path.is_symlink()
+    assert stat.S_IMODE(path.stat().st_mode) == 0o600
+spec = importlib.util.spec_from_file_location('cutover_hba', 'deploy/osaka-rails-production/cutover_hba.py')
+hba = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(hba)
+hba.verify_rules('osm-api-sandbox-db-1', ip)
+actual = subprocess.run(['docker', 'exec', '-u', 'postgres', 'osm-api-sandbox-db-1', 'cat', hba.HBA], capture_output=True, text=True, check=True).stdout
+assert actual == hba.block(ip) + (stage / 'pg_hba.rollback').read_text()
+PY
 test "$(docker exec osm-api-sandbox-db-1 psql -X -U postgres -d openstreetmap -Atc \
   "SELECT rolcanlogin AND NOT rolsuper AND NOT rolcreatedb AND NOT rolcreaterole AND NOT rolreplication AND NOT rolbypassrls FROM pg_roles WHERE rolname='osm_rails_cutover_rw'")" = t
-docker exec -i osm-api-sandbox-db-1 psql -X -U postgres -d openstreetmap -At <<'SQL' | python3 -c 'import sys; assert sys.stdin.read().splitlines()==["55", "35", "f|f|f|f|f"]'
+docker exec -i osm-api-sandbox-db-1 psql -X -U postgres -d openstreetmap -At <<'SQL' | python3 -c 'import sys; assert sys.stdin.read().splitlines()==["55", "35", "f|f|f|f|f|f|f"]'
 SELECT count(*) FILTER (WHERE has_table_privilege('osm_rails_cutover_rw',format('%I.%I',schemaname,tablename),'SELECT') AND has_table_privilege('osm_rails_cutover_rw',format('%I.%I',schemaname,tablename),'INSERT') AND has_table_privilege('osm_rails_cutover_rw',format('%I.%I',schemaname,tablename),'UPDATE') AND has_table_privilege('osm_rails_cutover_rw',format('%I.%I',schemaname,tablename),'DELETE')) FROM pg_tables WHERE schemaname='public' AND tablename NOT IN ('schema_migrations','ar_internal_metadata','spatial_ref_sys');
 SELECT count(*) FILTER (WHERE has_sequence_privilege('osm_rails_cutover_rw',format('%I.%I',schemaname,sequencename),'USAGE') AND has_sequence_privilege('osm_rails_cutover_rw',format('%I.%I',schemaname,sequencename),'SELECT')) FROM pg_sequences WHERE schemaname='public';
-SELECT has_database_privilege('osm_rails_cutover_rw','openstreetmap','TEMP'),has_schema_privilege('osm_rails_cutover_rw','public','CREATE'),has_table_privilege('osm_rails_cutover_rw','public.schema_migrations','INSERT'),has_table_privilege('osm_rails_cutover_rw','public.ar_internal_metadata','INSERT'),has_table_privilege('osm_rails_cutover_rw','public.spatial_ref_sys','INSERT');
+SELECT has_database_privilege('osm_rails_cutover_rw','openstreetmap','TEMP'),has_schema_privilege('osm_rails_cutover_rw','public','CREATE'),has_table_privilege('osm_rails_cutover_rw','public.schema_migrations','INSERT'),has_table_privilege('osm_rails_cutover_rw','public.ar_internal_metadata','INSERT'),has_table_privilege('osm_rails_cutover_rw','public.spatial_ref_sys','INSERT'),has_table_privilege('osm_rails_cutover_rw','public.geography_columns','INSERT'),has_table_privilege('osm_rails_cutover_rw','public.geometry_columns','INSERT');
 SQL
-python3 - "$RW_ROLE_STAGE" <<'PY'
-from pathlib import Path
-import sys
-p=Path(sys.argv[1]); f=p/'pg-client.env'
-f.write_text('PGPASSWORD='+(p/'role.password').read_text().strip()+'\n')
-f.chmod(0o600)
-PY
-export DB_IMAGE=sha256:7e04bfcf1b20b7ccd558f1977e9f08f72c5683b4b59b021a127cbe370a7ee574
-test "$(docker run --rm --network osm-api-sandbox_default --ip "$CUTOVER_IP" \
-  --env-file "$RW_ROLE_STAGE/pg-client.env" --entrypoint psql "$DB_IMAGE" \
-  -X -h db -U osm_rails_cutover_rw -d openstreetmap -Atc 'SELECT current_user')" = osm_rails_cutover_rw
-if docker run --rm --network osm-api-sandbox_default --ip "$CUTOVER_IP" \
-  -e PGPASSWORD=wrong --entrypoint psql "$DB_IMAGE" \
-  -X -h db -U osm_rails_cutover_rw -d openstreetmap -Atc 'SELECT 1'; then exit 1; fi
-if docker run --rm --network osm-api-sandbox_default --ip "$CUTOVER_IP" \
-  --entrypoint psql "$DB_IMAGE" \
-  -X -h db -U postgres -d openstreetmap -Atc 'SELECT 1'; then exit 1; fi
-if docker run --rm --network osm-api-sandbox_default --ip "$OTHER_TEST_IP" \
-  --entrypoint psql "$DB_IMAGE" \
-  -X -w -h db -U osm_rails_cutover_rw -d openstreetmap -Atc 'SELECT 1'; then exit 1; fi
-if docker run --rm --network osm-api-sandbox_default --ip "$OTHER_TEST_IP" \
-  --env-file "$RW_ROLE_STAGE/pg-client.env" --entrypoint psql "$DB_IMAGE" \
-  -X -h db -U osm_rails_cutover_rw -d openstreetmap -Atc 'SELECT 1'; then exit 1; fi
-if docker exec -u postgres osm-api-sandbox-db-1 psql -X -w \
-  -U osm_rails_cutover_rw -d openstreetmap -Atc 'SELECT 1'; then exit 1; fi
-# Recheck 3002, 3003, original counts and container restart counts here.
-# Retain the private role password and HBA backup for rollback/review.
 ```
 
-The existing `openstreetmap` login and HBA paths stay unchanged. The new role grants broad application DML on 55 current tables, read-only access to three metadata/reference tables, and USAGE/SELECT on 35 sequences. It cannot own objects or run migrations. The complete login/OAuth/API edit and storage flow has already passed on a disposable restore with this exact role; no such test has been run against Osaka.
+The existing `openstreetmap` login and HBA paths stay unchanged. The new role grants broad application DML on 55 current tables, read-only access to five metadata/reference tables and views, and USAGE/SELECT on 35 sequences. The initial live provisioner also granted DML on two PostGIS metadata views; those grants were immediately revoked and the corrected provisioner was reapplied with the existing credential. All five are now read-only. The role cannot own objects or run migrations. The complete login/OAuth/API edit and storage flow passed on a disposable restore with this exact role; no such test has been run against Osaka.
 
 ```sh
 python3 deploy/osaka-rails-production/make_cutover_env.py "$RW_ROLE_STAGE/role.password" "$STAGE/cutover.env"

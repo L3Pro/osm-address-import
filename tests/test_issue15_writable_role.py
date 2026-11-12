@@ -32,6 +32,8 @@ class WritableRoleTest(unittest.TestCase):
         self.assertIn("GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES", sql)
         self.assertIn("REVOKE INSERT, UPDATE, DELETE ON TABLE public.ar_internal_metadata", sql)
         self.assertIn("public.schema_migrations", sql)
+        self.assertIn("public.geography_columns", sql)
+        self.assertIn("public.geometry_columns", sql)
         self.assertIn("GRANT USAGE, SELECT ON ALL SEQUENCES", sql)
         self.assertNotIn("GRANT CREATE", sql)
         self.assertNotIn("GRANT UPDATE ON ALL SEQUENCES", sql)
