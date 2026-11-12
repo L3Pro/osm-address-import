@@ -38,9 +38,11 @@ The repository is a **foundation scaffold**, not a working address importer. The
 
 ## Repository development
 
-The initial Python code is a deliberately small **sandbox endpoint guard**, not an uploader. Run its tests without credentials or datasets:
+The Python code includes a sandbox endpoint guard and an opt-in Osaka API regression harness; there is no address importer. Run the offline tests without credentials or datasets:
 
     python -m unittest discover -s tests -v
+
+The Osaka API read-only smoke and opt-in synthetic edit harness is documented in [Osaka API harness](docs/OSAKA_API_HARNESS.md).
 
 No NAD downloads, complete OSM extracts, output address lists, API credentials, or employer-proprietary data belong in this repository. See the [data policy](docs/DATA_SOURCES.md).
 
