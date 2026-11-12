@@ -5,20 +5,22 @@ import json
 import os
 import re
 import sys
+import tempfile
 import time
 import uuid
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlencode, urlsplit
+from urllib.parse import urlencode
 from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_opener
+
+from osm_address_import.docker_isolation import verify_isolated_docker
 
 
 BBOX = "135.4988,34.6652,135.5010,34.6670"
 KNOWN_WAY_ID = 658187857
 MAX_BODY = 2_000_000
-ALLOWED_LOCAL = {"127.0.0.1", "localhost", "::1"}
 WRITE_CONFIRMATION = "I_APPROVE_SYNTHETIC_WRITE"
 
 
@@ -32,22 +34,11 @@ class NoRedirect(HTTPRedirectHandler):
 
 
 def checked_base_url(value, isolated=False):
-    """Only explicit loopback endpoints are accepted; public API hosts always fail."""
-    if not isinstance(value, str) or not value or value != value.strip():
-        raise HarnessError("explicit loopback base URL required")
-    try:
-        part = urlsplit(value)
-        port = part.port
-    except ValueError as exc:
-        raise HarnessError("malformed base URL") from exc
-    if part.hostname in {"api.openstreetmap.org", "www.openstreetmap.org", "openstreetmap.org"}:
-        raise HarnessError("public OpenStreetMap production hosts are forbidden")
-    allowed_ports = {39003} if isolated else {3003}
-    if (part.scheme != "http" or part.hostname not in ALLOWED_LOCAL
-            or port not in allowed_ports or part.path not in ("", "/")
-            or part.query or part.fragment or part.username or part.password):
-        raise HarnessError("target must be an approved loopback endpoint with no URL credentials")
-    return value.rstrip("/")
+    """Accept one exact numeric loopback URL per mode, with no DNS lookup."""
+    expected = "http://127.0.0.1:39003" if isolated else "http://127.0.0.1:3003"
+    if value != expected:
+        raise HarnessError(f"target must exactly equal the approved {'isolated' if isolated else 'smoke'} loopback URL")
+    return expected
 
 
 def xml_root(body, expected="osm"):
@@ -66,18 +57,35 @@ def positive_id(value, label):
     return int(value)
 
 
+def safe_error(exc, token=None):
+    message = str(exc)
+    return message.replace(token, "[REDACTED]") if token else message
+
+
 class Harness:
-    def __init__(self, base_url, token=None, account=None, isolated=False):
+    def __init__(self, base_url, token=None, account=None, isolated=False,
+                 isolated_project=None, write_enabled=False):
+        if write_enabled and (not isolated or not isolated_project):
+            raise HarnessError("writes require an isolated target and project")
         self.base_url = checked_base_url(base_url, isolated)
         self.token = token
         self.account = account
+        self.isolated_project = isolated_project
+        self.write_enabled = write_enabled
         self.results = []
         self.created = {"changeset_id": None, "node_id": None, "marker": None}
+        self.changeset_state = "not_started"
+        self.upload_state = "not_started"
         self.opener = build_opener(ProxyHandler({}), NoRedirect())
 
     def request(self, method, path, expected, validate, body=None, auth=False):
         if not path.startswith("/") or path.startswith("//"):
             raise HarnessError("path must be relative to the approved API origin")
+        if method != "GET":
+            if (not self.write_enabled or not self.isolated_project
+                    or self.base_url != "http://127.0.0.1:39003"):
+                raise HarnessError("non-GET request requires isolated WRITE_E2E mode")
+            verify_isolated_docker(self.isolated_project)
         headers = {"Accept": "application/json" if path.endswith(".json") else "application/xml",
                    "User-Agent": "osm-address-import-osaka-harness/1"}
         if body is not None:
@@ -110,10 +118,11 @@ class Harness:
                 entry["result"] = "pass"
                 return payload
         except (URLError, TimeoutError) as exc:
-            entry["failure"] = f"transport error: {exc.reason if isinstance(exc, URLError) else exc}"
+            entry["failure"] = "transport error: " + safe_error(
+                exc.reason if isinstance(exc, URLError) else exc, self.token)
             raise HarnessError(entry["failure"]) from exc
         except Exception as exc:
-            entry["failure"] = str(exc)
+            entry["failure"] = safe_error(exc, self.token)
             raise
         finally:
             entry["duration_ms"] = round((time.monotonic() - started) * 1000, 2)
@@ -164,8 +173,10 @@ class Harness:
         self.request("GET", "/api/0.6/map?bbox=not-a-bbox", {400},
                      lambda body, ct: "malformed bbox rejected")
     def write_e2e(self):
-        if not self.token or not self.account:
-            raise HarnessError("dedicated account name and scoped OAuth token required")
+        if (not self.write_enabled or not self.isolated_project
+                or os.getenv("OSM_API_WRITE_E2E") != WRITE_CONFIRMATION
+                or not self.token or not self.account):
+            raise HarnessError("isolated write approval, dedicated account and scoped token required")
         self.request("PUT", "/api/0.6/changeset/create", {401, 403},
                      lambda body, ct: "missing OAuth token rejected", body=b"<osm><changeset/></osm>")
         previous = self.token
@@ -185,6 +196,7 @@ class Harness:
 
         marker = "osm-address-import-api-harness-" + uuid.uuid4().hex
         self.created["marker"] = marker
+        self.changeset_state = "create_outcome_unknown"
         changeset = ET.Element("osm", version="0.6", generator="osm-address-import-api-harness")
         item = ET.SubElement(changeset, "changeset")
         for k, v in (("comment", "Synthetic Osaka sandbox API regression test"),
@@ -192,10 +204,12 @@ class Harness:
             ET.SubElement(item, "tag", k=k, v=v)
         def check_created(body, content_type):
             self.created["changeset_id"] = positive_id(body.decode().strip(), "created changeset ID")
+            self.changeset_state = "open"
             return f"changeset {self.created['changeset_id']} created"
         self.request("PUT", "/api/0.6/changeset/create", {200}, check_created,
                      body=ET.tostring(changeset), auth=True)
         cid = self.created["changeset_id"]
+        primary_error = None
         try:
             change = ET.Element("osmChange", version="0.6", generator="osm-address-import-api-harness")
             create = ET.SubElement(change, "create")
@@ -210,8 +224,10 @@ class Harness:
                     raise HarnessError("diffResult did not map synthetic node -1 to version 1")
                 self.created["node_id"] = positive_id(mapped.get("new_id"), "new node ID")
                 return f"node -1 mapped to {self.created['node_id']} v1"
+            self.upload_state = "outcome_unknown"
             self.request("POST", f"/api/0.6/changeset/{cid}/upload", {200}, check_diff,
                          body=ET.tostring(change), auth=True)
+            self.upload_state = "diff_confirmed"
             nid = self.created["node_id"]
             def check_node(body, content_type):
                 root = xml_root(body)
@@ -226,10 +242,19 @@ class Harness:
                     raise HarnessError("node version, changeset, coordinates or marker mismatch")
                 return f"node {nid} coordinates/tags/version/changeset verified"
             self.request("GET", f"/api/0.6/node/{nid}", {200}, check_node)
-        finally:
-            if cid:
-                self.request("PUT", f"/api/0.6/changeset/{cid}/close", {200},
-                             lambda body, ct: "changeset close accepted", body=b"", auth=True)
+            self.upload_state = "readback_verified"
+        except Exception as exc:
+            primary_error = exc
+        self.changeset_state = "close_outcome_unknown"
+        try:
+            self.request("PUT", f"/api/0.6/changeset/{cid}/close", {200},
+                         lambda body, ct: "changeset close accepted", body=b"", auth=True)
+            self.changeset_state = "close_accepted"
+        except Exception as exc:
+            if primary_error:
+                raise HarnessError("upload/readback failed: " + safe_error(primary_error, self.token)
+                                   + "; close also failed: " + safe_error(exc, self.token)) from primary_error
+            raise
 
         def check_closed(body, content_type):
             root = xml_root(body)
@@ -241,13 +266,18 @@ class Harness:
                 raise HarnessError("changeset marker not persisted")
             return f"changeset {cid} closed with marker persisted"
         self.request("GET", f"/api/0.6/changeset/{cid}", {200}, check_closed)
+        self.changeset_state = "verified_closed"
+        if primary_error:
+            raise primary_error
 
     def report(self, mode):
         return {"schema_version": 1, "mode": mode, "target": self.base_url,
                 "timestamp_utc": datetime.now(timezone.utc).isoformat(),
                 "summary": {"passed": sum(x["result"] == "pass" for x in self.results),
                             "failed": sum(x["result"] == "fail" for x in self.results)},
-                "requests": self.results, "created": self.created}
+                "requests": self.results, "created": self.created,
+                "changeset_state": self.changeset_state,
+                "upload_state": self.upload_state}
 
 
 def main(argv=None):
@@ -256,37 +286,47 @@ def main(argv=None):
     parser.add_argument("--base-url", default="http://127.0.0.1:3003")
     parser.add_argument("--report", required=True, type=Path)
     parser.add_argument("--isolated", action="store_true", help="only port 39003 on loopback")
+    parser.add_argument("--isolated-project", help="unique disposable Docker Compose project")
     parser.add_argument("--allow-write", action="store_true")
-    parser.add_argument("--live-sandbox-approved", action="store_true")
     args = parser.parse_args(argv)
     harness = None
     error = None
     try:
         if args.mode == "write-e2e":
             if (not args.allow_write or os.getenv("OSM_API_WRITE_E2E") != WRITE_CONFIRMATION
-                    or not (args.isolated ^ args.live_sandbox_approved)):
-                raise HarnessError("write requires --allow-write, confirmation environment value, and exactly one target approval flag")
-        elif args.allow_write or args.live_sandbox_approved:
+                    or not args.isolated or not args.isolated_project):
+                raise HarnessError("write requires --allow-write, confirmation environment value, --isolated and --isolated-project")
+        elif args.allow_write or args.isolated_project:
             raise HarnessError("write flags are invalid in smoke mode")
         harness = Harness(args.base_url, os.getenv("OSM_API_TEST_TOKEN"),
-                          os.getenv("OSM_API_TEST_ACCOUNT"), isolated=args.isolated)
+                          os.getenv("OSM_API_TEST_ACCOUNT"), isolated=args.isolated,
+                          isolated_project=args.isolated_project,
+                          write_enabled=args.mode == "write-e2e")
         if args.mode == "smoke":
             harness.smoke()
         else:
             harness.write_e2e()
     except Exception as exc:
-        error = str(exc)
+        error = safe_error(exc, harness.token if harness else os.getenv("OSM_API_TEST_TOKEN"))
     report = harness.report(args.mode) if harness else {
         "schema_version": 1, "mode": args.mode, "target": "rejected",
         "summary": {"passed": 0, "failed": 1}, "requests": [],
-        "created": {"changeset_id": None, "node_id": None, "marker": None}}
+        "created": {"changeset_id": None, "node_id": None, "marker": None},
+        "changeset_state": "not_started", "upload_state": "not_started"}
     if error:
         report["failure"] = error
         if report["summary"]["failed"] == 0:
             report["summary"]["failed"] = 1
     args.report.parent.mkdir(parents=True, exist_ok=True)
-    args.report.write_text(json.dumps(report, indent=2, ensure_ascii=False) + "\n")
-    os.chmod(args.report, 0o600)
+    fd, temporary = tempfile.mkstemp(prefix=".osm-api-report-", dir=args.report.parent)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as stream:
+            json.dump(report, stream, indent=2, ensure_ascii=False)
+            stream.write("\n")
+        os.replace(temporary, args.report)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
     print(f"{args.mode}: {report['summary']['passed']} passed, {report['summary']['failed']} failed; report {args.report}")
     if error:
         print(error, file=sys.stderr)
