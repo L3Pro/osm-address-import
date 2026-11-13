@@ -168,6 +168,20 @@ def run_city(args):
     code_commit = command(["git", "rev-parse", "HEAD"]).strip()
     report = blank_report(city, spec, stats, fixture, args.run_dir.name,
                           args.baseline_id, code_commit)
+    prior_path = args.run_dir / f"{args.city}.json"
+    if prior_path.exists():
+        prior = json.loads(prior_path.read_text())
+        if any((prior["metrics"][typ]["newly_inserted"] or 0) > 0
+               for typ in ("nodes", "ways", "relations")):
+            raise RuntimeError("previous city attempt committed objects; inspect it before any manual retry")
+        attempt = 1 + len(list(args.run_dir.glob(f"{args.city}-attempt-*.json")))
+        shutil.copy2(prior_path, args.run_dir / f"{args.city}-attempt-{attempt}.json")
+        shutil.copy2(args.run_dir / f"{args.city}.md",
+                     args.run_dir / f"{args.city}-attempt-{attempt}.md")
+        report["retries"].append({"previous_status": prior["status"],
+                                  "previous_started_at": prior["started_at"],
+                                  "previous_errors": prior["errors"],
+                                  "archived_as": f"{args.city}-attempt-{attempt}.json"})
     started = time.monotonic()
     attempted_sql = False
     committed = False
@@ -210,7 +224,11 @@ def run_city(args):
         report["validations"]["boundary"] = _check(
             "PASS", f"relation {city['relation_id']}, admin_level=8, IBGE {city['ibge_code']}; polygon bounds {stats['boundary_bounds']}")
         prepared = args.work_dir / f"{args.city}-complete.osm.pbf"
-        refs_output = command([args.osmium_bin, "check-refs", "-r", str(prepared)], timeout=120)
+        refs_proc = subprocess.run([args.osmium_bin, "check-refs", "-r", str(prepared)],
+                                   capture_output=True, text=True, timeout=120, check=False)
+        refs_output = refs_proc.stdout + refs_proc.stderr
+        if refs_proc.returncode:
+            raise RuntimeError(f"osmium check-refs failed: {refs_output[-1000:]}")
         if len(re.findall(r"missing:\s*0", refs_output)) != 4:
             raise RuntimeError("prepared PBF has unresolved references")
         staged = args.work_dir / f"{args.city}-stage"
