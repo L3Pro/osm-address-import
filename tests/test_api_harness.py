@@ -30,6 +30,18 @@ class TargetGuardTests(unittest.TestCase):
         self.assertTrue(any("bbox=-46.6400%2C-23.5600%2C-46.6390%2C-23.5590" in x for x in endpoints))
         self.assertEqual(harness.report("smoke")["fixtures"]["known_way_id"], 123456)
 
+    def test_seven_city_fixtures_add_only_bounded_reads(self):
+        import json
+        fixtures = json.loads((pathlib.Path(__file__).resolve().parents[1] /
+                               "config/brazil_api_fixtures.json").read_text())
+        harness = Harness("http://127.0.0.1:3003")
+        with patch.object(harness, "request") as request:
+            harness.smoke()
+            harness.brazil_smoke(fixtures)
+        self.assertEqual(request.call_count, 36)
+        self.assertTrue(all(call.args[0] == "GET" for call in request.call_args_list))
+        self.assertEqual(sum("/api/0.6/map?" in call.args[1] for call in request.call_args_list), 9)
+
     def test_malformed_or_large_fixtures_fail_before_network(self):
         for value in ("0", "-1", "1/2", "99999999999999999999", "1e3"):
             with self.subTest(way=value), self.assertRaises(HarnessError):
