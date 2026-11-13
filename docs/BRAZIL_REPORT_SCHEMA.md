@@ -37,6 +37,18 @@ health, and Rails health. Each has `status` (`PASS`, `FAIL`, `SKIPPED`, or
 `NOT_VERIFIED`) and supporting `evidence`. `SUCCESS` requires every critical
 check to be `PASS`. Failed imports still produce both file formats.
 
+An explicit operator live-editor attestation may close an editor
+`NOT_VERIFIED` check. The private attestation names all eight areas, identifies
+its evidence as operator-attested visual inspection, records its receipt time,
+and states whether screenshots were supplied to the agent. The closeout keeps
+the previous editor validation and resolved warning under `closeout`, changes
+only the editor validation and derived city status, and retains import counts,
+timestamps, retry history, and staging evidence. Editor `PASS` means features,
+aerial imagery, and editing controls were visually available through the live
+authenticated site. It does **not** mean a live API write was tested. City
+`SUCCESS` still requires every critical check to pass with evidence and no
+unresolved error.
+
 The summary includes all seven city statuses, total unique newly inserted
 objects, existing/duplicate/conflict/failed/rolled-back totals, cumulative
 processing duration, database sizes before/after, Osaka validation status, and
@@ -46,3 +58,9 @@ counted again. The processing duration includes archived retry attempts; their
 statuses and durations appear separately in `retry_attempts`. Secrets, bearer
 tokens, passwords, dumps, extracts, and raw
 manifests must not be committed or embedded in reports.
+The consolidated status becomes `SUCCESS` only when all seven city statuses,
+Osaka preservation, and the operator-attested Osaka live editor check pass.
+`osaka_editor_validation` and `live_editor_attestation` record that evidence
+and explicitly preserve `live_write_verified: false`. `finished_at` remains the
+import finish time; `closeout_at` records when the later visual attestation was
+received.

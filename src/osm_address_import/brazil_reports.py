@@ -163,7 +163,8 @@ def write_city(run_dir: Path, slug: str, report: dict):
 
 def write_summary(run_dir: Path, reports: list[dict], *, started_at, finished_at,
                   database_size_before, database_size_after, baseline_id, run_id,
-                  retry_attempts=None):
+                  retry_attempts=None, osaka_editor_validation=None,
+                  live_editor_attestation=None):
     if len(reports) != 7 or len({item["city"] for item in reports}) != 7:
         raise ReportError("summary requires seven distinct city reports")
     for item in reports:
@@ -176,11 +177,20 @@ def write_summary(run_dir: Path, reports: list[dict], *, started_at, finished_at
               for key in ("already_present", "skipped_duplicates", "conflicts", "failed", "rolled_back")}
     unique_inserted = {typ: sum(item["metrics"][typ]["newly_inserted"] or 0 for item in reports)
                        for typ in ("nodes", "ways", "relations")}
-    status = "SUCCESS" if all(item["status"] == "SUCCESS" for item in reports) else (
+    osaka_editor_validation = osaka_editor_validation or {
+        "status": "NOT_VERIFIED", "evidence": "No operator-attested live Osaka editor check recorded"}
+    if (osaka_editor_validation.get("status") not in CHECK_STATUSES
+            or (osaka_editor_validation["status"] == "PASS"
+                and not osaka_editor_validation.get("evidence"))):
+        raise ReportError("invalid Osaka editor validation")
+    status = "SUCCESS" if (all(item["status"] == "SUCCESS" for item in reports)
+                           and osaka_editor_validation["status"] == "PASS") else (
         "FAILED" if any(item["status"] == "FAILED" for item in reports) else "PARTIAL"
     )
     summary = {"schema_version": SCHEMA_VERSION, "run_id": run_id, "baseline_id": baseline_id,
-               "started_at": started_at, "finished_at": finished_at, "status": status,
+               "started_at": started_at, "finished_at": finished_at,
+               "closeout_at": (live_editor_attestation or {}).get("recorded_at"),
+               "status": status,
                "total_processing_duration_seconds": round(sum(
                    item["duration_seconds"] or 0 for item in reports + retry_attempts), 3),
                "retry_processing_duration_seconds": round(sum(
@@ -192,6 +202,8 @@ def write_summary(run_dir: Path, reports: list[dict], *, started_at, finished_at
                "osaka_validation": "PASS" if all(
                    item["validations"]["osaka_preservation"]["status"] == "PASS"
                    for item in reports) else "NOT_VERIFIED",
+               "osaka_editor_validation": osaka_editor_validation,
+               "live_editor_attestation": live_editor_attestation,
                "database_size_before": database_size_before,
                "database_size_after": database_size_after,
                "unique_newly_inserted": unique_inserted, "totals": totals,
@@ -199,11 +211,15 @@ def write_summary(run_dir: Path, reports: list[dict], *, started_at, finished_at
                             "status": item["status"], "duration_seconds": item["duration_seconds"],
                             "validations": item["validations"]} for item in reports]}
     _atomic_text(run_dir / "summary.json", json.dumps(summary, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
-    lines = [f"# Brazil seven-city import — {status}", "", f"Run: `{run_id}` · baseline: `{baseline_id}`", "",
-             "| City | State | Status | Seconds |", "|---|---|---|---:|"]
+    lines = [f"# Brazil seven-city import — {status}", "",
+             f"Run: `{run_id}` · baseline: `{baseline_id}`", ""]
+    if summary["closeout_at"]:
+        lines += [f"Operator visual closeout recorded: `{summary['closeout_at']}`", ""]
+    lines += ["| City | State | Status | Seconds |", "|---|---|---|---:|"]
     for item in reports:
         lines.append(f"| {item['city']} | {item['state']} | {item['status']} | {item['duration_seconds']} |")
     lines += ["", f"Osaka preservation: **{summary['osaka_validation']}**", "",
+              f"Osaka live editor: **{osaka_editor_validation['status']}** — {osaka_editor_validation['evidence']}", "",
               "## Validation status", "",
               "| City | API reads/map | References | Editor | Database/Rails | Import |",
               "|---|---|---|---|---|---|"]

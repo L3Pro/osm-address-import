@@ -9,7 +9,9 @@ from osm_address_import.brazil_reports import (
     COUNT_COLUMNS, CRITICAL_CHECKS, METRICS, ReportError, SCHEMA_VERSION,
     validate_city, write_city, write_summary,
 )
-from osm_address_import.brazil_finalize_reports import attach_stage_browser
+from osm_address_import.brazil_finalize_reports import (
+    attach_stage_browser, finalize_live_editor, validate_live_attestation,
+)
 
 
 def report(name="Canoas", status="SUCCESS"):
@@ -117,6 +119,62 @@ class BrazilReportsTest(unittest.TestCase):
                 self.assertEqual(item["validations"]["editor"]["status"], "NOT_VERIFIED")
                 self.assertIn("Live Cloudflare-authenticated browser session: NOT_VERIFIED",
                               item["validations"]["editor"]["evidence"])
+
+    def test_explicit_operator_attestation_closes_visual_checks_without_live_write_claim(self):
+        slugs = ["manaus", "natal", "canoas", "novo-hamburgo", "itu", "jundiai", "atibaia"]
+        observation = {"status": "PASS", "osm_features": True,
+                       "aerial_imagery": True, "editing_controls": True}
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "20261113-7c4e9a21"
+            root.mkdir()
+            config = root / "cities-config.json"
+            config.write_text(json.dumps({"cities": [{"slug": slug} for slug in slugs]}))
+            (root / "osaka-baseline.json").write_text(json.dumps({
+                "baseline_id": "base-1", "counts": {"size": 100}}))
+            (root / "stage-browser.json").write_text(json.dumps({
+                "status": "PASS", "project": "osaka-api-harness-20261113-7c4e9a21",
+                "cities": {slug: {"status": "PASS", "dom": {
+                    "mapRequests": 2, "osmPaths": 5}} for slug in slugs}}))
+            for slug in slugs:
+                item = report(name=slug, status="PARTIAL")
+                item["run_id"] = root.name
+                item["validations"]["editor"] = {"status": "NOT_VERIFIED", "evidence":
+                    "Authenticated isolated Firefox iD: PASS. Live Cloudflare-authenticated browser session: NOT_VERIFIED."}
+                write_city(root, slug, item)
+            attestation = {"schema_version": "1.0", "run_id": root.name,
+                           "evidence_type": "operator-attested live visual inspection",
+                           "site": "https://osm-sandbox.mapviewer.ai",
+                           "recorded_at": "2026-11-13T19:45:14Z",
+                           "areas": {slug: observation.copy() for slug in slugs + ["osaka"]},
+                           "live_edits_saved": False, "live_write_verified": False,
+                           "screenshots": {"reported_by_operator": True,
+                                           "files_supplied_to_agent": False}}
+            attestation_path = root / "operator-live-editor-attestation.json"
+            attestation_path.write_text(json.dumps(attestation))
+            summary = finalize_live_editor(root, config, attestation_path)
+            self.assertEqual(summary["status"], "SUCCESS")
+            self.assertEqual(summary["osaka_editor_validation"]["status"], "PASS")
+            self.assertIs(summary["live_editor_attestation"]["live_write_verified"], False)
+            item = json.loads((root / "manaus.json").read_text())
+            self.assertEqual(item["status"], "SUCCESS")
+            self.assertEqual(item["started_at"], "2026-11-13T00:00:00Z")
+            self.assertEqual(item["closeout"]["previous_editor_validation"]["status"], "NOT_VERIFIED")
+            self.assertIn("live write NOT_VERIFIED", item["validations"]["editor"]["evidence"])
+            self.assertEqual(finalize_live_editor(root, config, attestation_path)["status"], "SUCCESS")
+            attestation["live_write_verified"] = True
+            with self.assertRaises(ValueError):
+                validate_live_attestation(attestation, root.name, set(slugs))
+
+    def test_other_unverified_check_prevents_closeout(self):
+        attestation = {"schema_version": "1.0", "run_id": "run-1",
+                       "evidence_type": "operator-attested live visual inspection",
+                       "site": "https://osm-sandbox.mapviewer.ai",
+                       "recorded_at": "2026-11-13T19:45:14Z", "areas": {},
+                       "live_edits_saved": False, "live_write_verified": False,
+                       "screenshots": {"reported_by_operator": True,
+                                       "files_supplied_to_agent": False}}
+        with self.assertRaises(ValueError):
+            validate_live_attestation(attestation, "run-1", {"manaus"})
 
 
 if __name__ == "__main__":

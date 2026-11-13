@@ -90,6 +90,17 @@ PBF/CSV/dump files remain private and out of Git. A city cannot be `SUCCESS`
 while a critical check lacks passing evidence. Browser-only iD rendering must
 be marked `NOT_VERIFIED` until an authenticated browser check is done.
 
+To close the live visual check, save an explicit operator attestation as
+`operator-live-editor-attestation.json` in the private run directory, with one
+PASS observation for Osaka and each Brazilian city. Run
+`python -m osm_address_import.brazil_finalize_reports finalize-live-editor
+--run-dir reports/runs/brazil-seven-cities/RUN_ID --attestation
+reports/runs/brazil-seven-cities/RUN_ID/operator-live-editor-attestation.json`.
+The closeout validates the attestation and existing staged evidence, preserves
+the previous editor state in each city report, and regenerates the consolidated
+reports. It records visual availability only; it does not claim or perform a
+live API write.
+
 After the append, run the original eight-check read-only smoke and the optional
 seven-city fixture extension with `python -m osm_address_import.api_harness
 smoke --report REPORT.json --brazil-fixtures config/brazil_api_fixtures.json`.
@@ -116,14 +127,14 @@ highway and other feature counts, and manifest checksums.
 
 | Area | Nodes | Ways | Relations | Buildings | Address objects | API | Editor |
 |---|---:|---:|---:|---:|---:|---|---|
-| Osaka | 1,865,425 | 364,226 | 4,350 | 282,770 | 5,042 | PASS | Staged PASS; live session pending |
-| Manaus | 708,993 | 88,005 | 649 | 47,436 | 2,064 | PASS | Staged PASS; live session pending |
-| Natal | 214,170 | 43,422 | 1,546 | 10,995 | 3,583 | PASS | Staged PASS; live session pending |
-| Canoas | 103,940 | 20,387 | 789 | 8,647 | 963 | PASS | Staged PASS; live session pending |
-| Novo Hamburgo | 54,963 | 9,603 | 212 | 1,559 | 1,609 | PASS | Staged PASS; live session pending |
-| Itu | 363,107 | 15,720 | 216 | 2,922 | 474 | PASS | Staged PASS; live session pending |
-| Jundiaí | 316,759 | 29,437 | 351 | 5,331 | 697 | PASS | Staged PASS; live session pending |
-| Atibaia | 278,516 | 14,278 | 156 | 4,408 | 562 | PASS | Staged PASS; live session pending |
+| Osaka | 1,865,425 | 364,226 | 4,350 | 282,770 | 5,042 | PASS | Staged PASS; live operator PASS |
+| Manaus | 708,993 | 88,005 | 649 | 47,436 | 2,064 | PASS | Staged PASS; live operator PASS |
+| Natal | 214,170 | 43,422 | 1,546 | 10,995 | 3,583 | PASS | Staged PASS; live operator PASS |
+| Canoas | 103,940 | 20,387 | 789 | 8,647 | 963 | PASS | Staged PASS; live operator PASS |
+| Novo Hamburgo | 54,963 | 9,603 | 212 | 1,559 | 1,609 | PASS | Staged PASS; live operator PASS |
+| Itu | 363,107 | 15,720 | 216 | 2,922 | 474 | PASS | Staged PASS; live operator PASS |
+| Jundiaí | 316,759 | 29,437 | 351 | 5,331 | 697 | PASS | Staged PASS; live operator PASS |
+| Atibaia | 278,516 | 14,278 | 156 | 4,408 | 562 | PASS | Staged PASS; live operator PASS |
 
 The seven transactions added **2,039,406 unique nodes, 220,848 unique ways,
 and 3,919 unique relations**. They skipped 1,042 node and four way duplicate
@@ -150,12 +161,15 @@ The original read-only Osaka smoke passed **8/8** after import. The expanded
 Osaka plus seven-city read-only suite passed **36/36**. Live Rails on loopback
 port 3003 returned capabilities, representative maps, and sampled node, way,
 and relation XML for every city. The public hostname returned the expected
-Cloudflare Access authentication redirect. The per-city and consolidated final
-audit statuses are `PARTIAL` because a browser authenticated through the live
-Cloudflare Access site has not yet been checked. Staged authenticated iD
-rendering is recorded with map-request and rendered-path counts in each city
-report. A human browser session should verify live login and iD display at the
-eight centers before upgrading those editor validations to `PASS`.
+Cloudflare Access authentication redirect. The operator subsequently attested
+to authenticated live iD visual checks through Cloudflare Access in all eight
+areas: OSM features, aerial imagery, and editing controls were visible. The
+attestation was received at `2026-11-13T19:47:34Z`; capture time was not
+supplied. Screenshots were reported by the operator but their files were not
+supplied to this agent. The seven city reports and consolidated report now
+calculate `SUCCESS`. Staged authenticated iD rendering remains recorded with
+map-request and rendered-path counts. No live edits were saved or tested, so
+visual success must not be read as proof of a live write.
 
 Private detailed JSON, Markdown, manifests, screenshots, logs and source
 artifacts remain under `reports/runs/brazil-seven-cities/20261113-7c4e9a21/`
@@ -167,5 +181,6 @@ All seven municipalities must have completed Markdown and JSON import reports
 with source provenance, object and feature statistics, before/after comparison,
 validation results, timing, and final status. A consolidated seven-city report
 must also be generated and verified. This run has those artifacts. Final
-`SUCCESS` remains pending a browser session authenticated through the live
-Cloudflare Access site for Osaka and the seven city editors.
+`SUCCESS` is recorded for the seven city imports and the consolidated run after
+the operator-attested live browser check. Live write behavior remains untested
+by design; only the isolated rehearsal performed an authenticated write.
