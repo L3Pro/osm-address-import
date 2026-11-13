@@ -38,7 +38,7 @@ The repository is a **foundation scaffold**, not a working address importer. The
 
 ## Repository development
 
-The Python code includes a sandbox endpoint guard and an opt-in Osaka API regression harness; there is no address importer. Run the offline tests without credentials or datasets:
+The Python code includes a sandbox endpoint guard, an opt-in Osaka API regression harness, and a guarded [seven-city Brazil OSM append](docs/BRAZIL_SEVEN_CITY_APPEND.md) with [versioned per-city audit reports](docs/BRAZIL_REPORT_SCHEMA.md). Run the offline tests without credentials or datasets:
 
     python -m unittest discover -s tests -v
 

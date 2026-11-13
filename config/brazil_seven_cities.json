@@ -1,0 +1,16 @@
+{
+  "source_provider": "Geofabrik",
+  "source_url": "https://download.geofabrik.de/south-america/brazil-261112.osm.pbf",
+  "source_snapshot_at": "2026-11-12T21:23:05Z",
+  "download_completed_at": "2026-11-13T13:56:45Z",
+  "source_sha256": "8bcb7af1bf98bf29b537ab2d9c8e6471991a7211d9d854141404b3e05b531b9a",
+  "cities": [
+    {"slug": "manaus", "name": "Manaus", "state": "AM", "relation_id": 332493, "ibge_code": "1302603"},
+    {"slug": "natal", "name": "Natal", "state": "RN", "relation_id": 301091, "ibge_code": "2408102"},
+    {"slug": "canoas", "name": "Canoas", "state": "RS", "relation_id": 242574, "ibge_code": "4304606"},
+    {"slug": "novo-hamburgo", "name": "Novo Hamburgo", "state": "RS", "relation_id": 242616, "ibge_code": "4313409"},
+    {"slug": "itu", "name": "Itu", "state": "SP", "relation_id": 298216, "ibge_code": "3523909"},
+    {"slug": "jundiai", "name": "Jundiaí", "state": "SP", "relation_id": 297991, "ibge_code": "3525904"},
+    {"slug": "atibaia", "name": "Atibaia", "state": "SP", "relation_id": 298253, "ibge_code": "3504107", "supplied_relation_id": 5349573}
+  ]
+}
