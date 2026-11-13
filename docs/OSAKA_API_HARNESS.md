@@ -1,6 +1,6 @@
 # Osaka OSM API regression harness
 
-The dependency-free Python harness checks OSM API 0.6 on the Osaka sandbox. It uses the pinned Box A bbox and existing way `658187857` only for GETs. No existing OSM object is edited. Reports are JSON with each request's method, endpoint, status, elapsed milliseconds, parse/validation result, failure, and any created IDs.
+The dependency-free Python harness checks OSM API 0.6 on the sandbox. SMOKE defaults to the Osaka Box A bbox and existing way `658187857` only for GETs; both fixtures are configurable. No existing OSM object is edited. Reports are JSON with each request's method, endpoint, status, elapsed milliseconds, parse/validation result, failure, and any created IDs.
 
 ## SMOKE: routine read-only run
 
@@ -13,6 +13,8 @@ python3 -m unittest discover -s tests -v
 ```
 
 SMOKE defaults to `http://127.0.0.1:3003`, sends only GETs, and needs no credentials. It checks both XML capability routes, JSON capabilities, a known way, a small map, a missing way, a malformed ID, and a malformed bbox. A report is written even when a check fails. `reports/runs/` is ignored by Git. Ordinary CI runs unit tests only; a runner with access to the Osaka loopback port can schedule SMOKE separately.
+
+Use `--known-way-id POSITIVE_OSM_ID --bbox minlon,minlat,maxlon,maxlat` to select a known existing way and a small populated area for another dataset. The way ID must be a positive 64-bit decimal ID. The bbox must contain ordered decimal longitude/latitude coordinates within world bounds, with each edge at most 0.1 degree and area at most 0.01 square degree. Invalid fixtures fail before any HTTP request. The selected fixtures are recorded in the report. **Update both Osaka defaults after the seven Brazilian cities are loaded**; choose a stable way and a small populated bbox from that sandbox dataset. These flags never change the API destination URL.
 
 ## WRITE_E2E: separately authorized synthetic edit
 
@@ -29,7 +31,7 @@ PYTHONPATH=src python3 -m osm_address_import.api_harness write-e2e \
   --report reports/runs/osaka-api-isolated-write.json
 ```
 
-Replace `YYYYMMDD-8hex` with the exact project name used for the disposable Compose instance. Port 39003 is reserved for that isolated Rails/database copy. Before every PUT or POST, the harness verifies the project-owned web and DB containers, the loopback port binding, the separate DB and storage volumes, exact network membership, and a `DATABASE_URL` pointing only to `db/openstreetmap` inside the isolated network. Docker access is required; missing or contradictory evidence stops the write. This does not defend against a host administrator replacing Docker resources between inspection and a request. Live WRITE_E2E is disabled in this review and requires a separate code change and authorization. Never run WRITE_E2E in ordinary CI.
+Replace `YYYYMMDD-8hex` with the exact project name used for the disposable Compose instance. Port 39003 is reserved for that isolated Rails/database copy. Before every write **and every OAuth-bearing GET**, the harness verifies the project-owned web and DB containers, the loopback port binding, the separate DB and storage volumes, exact network membership, and a `DATABASE_URL` pointing only to `db/openstreetmap` inside the isolated network. Docker access is required; missing or contradictory evidence stops the request before the bearer token is attached. This does not defend against a host administrator replacing Docker resources between inspection and a request. Live WRITE_E2E is disabled in this review and requires a separate code change and authorization. Never run WRITE_E2E in ordinary CI.
 
 WRITE_E2E sends two expected-to-fail authentication requests, verifies the dedicated account, creates one changeset, uploads exactly one new synthetic node with a UUID marker, reads and validates the node, closes the changeset, and reads the closed changeset. If the upload/readback fails after changeset creation, the harness still attempts to close the changeset. Closing a changeset **does not roll back its edits**; the synthetic node and history can remain in the disposable sandbox. The JSON report records the changeset and node IDs for audit. Keep private reports if they are needed for follow-up.
 

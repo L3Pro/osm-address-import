@@ -6,7 +6,10 @@ from unittest.mock import patch
 from urllib.error import HTTPError
 
 sys.path.insert(0, str(pathlib.Path(__file__).resolve().parents[1] / "src"))
-from osm_address_import.api_harness import Harness, HarnessError, NoRedirect, checked_base_url, xml_root
+from osm_address_import.api_harness import (
+    Harness, HarnessError, NoRedirect, checked_base_url, checked_bbox, checked_way_id, xml_root,
+)
+from osm_address_import.docker_isolation import IsolationError
 
 
 class TargetGuardTests(unittest.TestCase):
@@ -16,6 +19,25 @@ class TargetGuardTests(unittest.TestCase):
             harness.smoke()
         self.assertEqual(request.call_count, 8)
         self.assertTrue(all(call.args[0] == "GET" for call in request.call_args_list))
+
+    def test_custom_smoke_fixtures_are_bounded_and_reported(self):
+        harness = Harness("http://127.0.0.1:3003", known_way_id="123456",
+                          bbox="-46.6400,-23.5600,-46.6390,-23.5590")
+        with patch.object(harness, "request") as request:
+            harness.smoke()
+        endpoints = [call.args[1] for call in request.call_args_list]
+        self.assertIn("/api/0.6/way/123456", endpoints)
+        self.assertTrue(any("bbox=-46.6400%2C-23.5600%2C-46.6390%2C-23.5590" in x for x in endpoints))
+        self.assertEqual(harness.report("smoke")["fixtures"]["known_way_id"], 123456)
+
+    def test_malformed_or_large_fixtures_fail_before_network(self):
+        for value in ("0", "-1", "1/2", "99999999999999999999", "1e3"):
+            with self.subTest(way=value), self.assertRaises(HarnessError):
+                checked_way_id(value)
+        for value in ("not-a-bbox", "0,0,1,1", "181,0,182,1", "0,0,0,1",
+                      "0,0,0.01,NaN", "0,0,0.01,0.01?x=1", "0,0,0.2,0.01"):
+            with self.subTest(bbox=value), self.assertRaises(HarnessError):
+                checked_bbox(value)
 
     def test_approved_loopback_only(self):
         self.assertEqual(checked_base_url("http://127.0.0.1:3003"), "http://127.0.0.1:3003")
@@ -51,9 +73,28 @@ class TargetGuardTests(unittest.TestCase):
 
     def test_smoke_transport_rejects_non_get(self):
         harness = Harness("http://127.0.0.1:3003")
-        with self.assertRaisesRegex(HarnessError, "non-GET request"):
+        with self.assertRaisesRegex(HarnessError, "writes and OAuth requests"):
             harness.request("PUT", "/api/0.6/changeset/create", {200}, lambda body, ct: "valid")
         self.assertEqual(harness.results, [])
+
+    def test_authenticated_get_checks_isolation_before_http(self):
+        harness = Harness("http://127.0.0.1:39003", token="synthetic-token", isolated=True,
+                          isolated_project="osaka-api-harness-20261112-deadbeef", write_enabled=True)
+        opener = type("Opener", (), {"open": lambda *args, **kwargs: self.fail("HTTP request was sent")})()
+        harness.opener = opener
+        with patch("osm_address_import.api_harness.verify_isolated_docker",
+                   side_effect=IsolationError("container mismatch")) as verify:
+            with self.assertRaisesRegex(IsolationError, "container mismatch"):
+                harness.request("GET", "/api/0.6/user/details", {200},
+                                lambda body, ct: "valid", auth=True)
+        verify.assert_called_once_with("osaka-api-harness-20261112-deadbeef")
+        self.assertEqual(harness.results, [])
+
+    def test_oauth_get_cannot_target_live_loopback(self):
+        harness = Harness("http://127.0.0.1:3003", token="synthetic-token")
+        with self.assertRaisesRegex(HarnessError, "writes and OAuth requests"):
+            harness.request("GET", "/api/0.6/user/details", {200},
+                            lambda body, ct: "valid", auth=True)
 
     def test_direct_write_constructor_cannot_target_live_loopback(self):
         with self.assertRaisesRegex(HarnessError, "isolated target"):

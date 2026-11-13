@@ -10,6 +10,7 @@ import time
 import uuid
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
+from decimal import Decimal, InvalidOperation
 from pathlib import Path
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -18,8 +19,8 @@ from urllib.request import HTTPRedirectHandler, ProxyHandler, Request, build_ope
 from osm_address_import.docker_isolation import verify_isolated_docker
 
 
-BBOX = "135.4988,34.6652,135.5010,34.6670"
-KNOWN_WAY_ID = 658187857
+DEFAULT_BBOX = "135.4988,34.6652,135.5010,34.6670"
+DEFAULT_KNOWN_WAY_ID = "658187857"
 MAX_BODY = 2_000_000
 WRITE_CONFIRMATION = "I_APPROVE_SYNTHETIC_WRITE"
 
@@ -57,6 +58,32 @@ def positive_id(value, label):
     return int(value)
 
 
+def checked_way_id(value):
+    if not isinstance(value, str) or not re.fullmatch(r"[1-9][0-9]{0,18}", value):
+        raise HarnessError("known way ID must be a positive decimal OSM ID")
+    number = int(value)
+    if number > 2**63 - 1:
+        raise HarnessError("known way ID exceeds the OSM integer range")
+    return number
+
+
+def checked_bbox(value):
+    if not isinstance(value, str):
+        raise HarnessError("bbox must be four decimal coordinates")
+    fields = value.split(",")
+    if len(fields) != 4 or any(not re.fullmatch(r"-?[0-9]+(?:\.[0-9]+)?", field) for field in fields):
+        raise HarnessError("bbox must be minlon,minlat,maxlon,maxlat in decimal degrees")
+    try:
+        west, south, east, north = (Decimal(field) for field in fields)
+    except InvalidOperation as exc:
+        raise HarnessError("bbox contains an invalid coordinate") from exc
+    if (not (-180 <= west < east <= 180 and -90 <= south < north <= 90)
+            or east - west > Decimal("0.1") or north - south > Decimal("0.1")
+            or (east - west) * (north - south) > Decimal("0.01")):
+        raise HarnessError("bbox is outside valid geographic bounds or exceeds the small-area limit")
+    return value
+
+
 def safe_error(exc, token=None):
     message = str(exc)
     return message.replace(token, "[REDACTED]") if token else message
@@ -64,7 +91,8 @@ def safe_error(exc, token=None):
 
 class Harness:
     def __init__(self, base_url, token=None, account=None, isolated=False,
-                 isolated_project=None, write_enabled=False):
+                 isolated_project=None, write_enabled=False,
+                 known_way_id=DEFAULT_KNOWN_WAY_ID, bbox=DEFAULT_BBOX):
         if write_enabled and (not isolated or not isolated_project):
             raise HarnessError("writes require an isolated target and project")
         self.base_url = checked_base_url(base_url, isolated)
@@ -72,6 +100,8 @@ class Harness:
         self.account = account
         self.isolated_project = isolated_project
         self.write_enabled = write_enabled
+        self.known_way_id = checked_way_id(known_way_id)
+        self.bbox = checked_bbox(bbox)
         self.results = []
         self.created = {"changeset_id": None, "node_id": None, "marker": None}
         self.changeset_state = "not_started"
@@ -81,18 +111,18 @@ class Harness:
     def request(self, method, path, expected, validate, body=None, auth=False):
         if not path.startswith("/") or path.startswith("//"):
             raise HarnessError("path must be relative to the approved API origin")
-        if method != "GET":
+        if auth and not self.token:
+            raise HarnessError("dedicated OAuth bearer token required")
+        if method != "GET" or auth:
             if (not self.write_enabled or not self.isolated_project
                     or self.base_url != "http://127.0.0.1:39003"):
-                raise HarnessError("non-GET request requires isolated WRITE_E2E mode")
+                raise HarnessError("writes and OAuth requests require isolated WRITE_E2E mode")
             verify_isolated_docker(self.isolated_project)
         headers = {"Accept": "application/json" if path.endswith(".json") else "application/xml",
                    "User-Agent": "osm-address-import-osaka-harness/1"}
         if body is not None:
             headers["Content-Type"] = "text/xml; charset=utf-8"
         if auth:
-            if not self.token:
-                raise HarnessError("dedicated OAuth bearer token required")
             headers["Authorization"] = f"Bearer {self.token}"
         entry = {"method": method, "endpoint": path, "result": "fail", "status": None,
                  "duration_ms": None, "validation": None, "failure": None}
@@ -152,19 +182,19 @@ class Harness:
         def check_way(body, content_type):
             root = xml_root(body)
             way = root.find("way")
-            if way is None or positive_id(way.get("id"), "way ID") != KNOWN_WAY_ID or not way.findall("nd"):
+            if way is None or positive_id(way.get("id"), "way ID") != self.known_way_id or not way.findall("nd"):
                 raise HarnessError("known way ID or node references missing")
             if "xml" not in content_type:
                 raise HarnessError(f"unexpected content type: {content_type}")
-            return f"way {KNOWN_WAY_ID}, {len(way.findall('nd'))} node references"
-        self.request("GET", f"/api/0.6/way/{KNOWN_WAY_ID}", {200}, check_way)
+            return f"way {self.known_way_id}, {len(way.findall('nd'))} node references"
+        self.request("GET", f"/api/0.6/way/{self.known_way_id}", {200}, check_way)
 
         def check_map(body, content_type):
             root = xml_root(body)
             if "xml" not in content_type or root.find("bounds") is None or not root.findall("node") or not root.findall("way"):
                 raise HarnessError("map bounds/nodes/ways or XML content type missing")
             return f"map XML parsed: {len(root.findall('node'))} nodes, {len(root.findall('way'))} ways"
-        self.request("GET", f"/api/0.6/map?{urlencode({'bbox': BBOX})}", {200}, check_map)
+        self.request("GET", f"/api/0.6/map?{urlencode({'bbox': self.bbox})}", {200}, check_map)
 
         self.request("GET", "/api/0.6/way/999999999999999999", {404},
                      lambda body, ct: "missing way rejected")
@@ -272,6 +302,7 @@ class Harness:
 
     def report(self, mode):
         return {"schema_version": 1, "mode": mode, "target": self.base_url,
+                "fixtures": {"known_way_id": self.known_way_id, "bbox": self.bbox},
                 "timestamp_utc": datetime.now(timezone.utc).isoformat(),
                 "summary": {"passed": sum(x["result"] == "pass" for x in self.results),
                             "failed": sum(x["result"] == "fail" for x in self.results)},
@@ -284,6 +315,8 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("mode", choices=("smoke", "write-e2e"))
     parser.add_argument("--base-url", default="http://127.0.0.1:3003")
+    parser.add_argument("--known-way-id", default=DEFAULT_KNOWN_WAY_ID)
+    parser.add_argument("--bbox", default=DEFAULT_BBOX)
     parser.add_argument("--report", required=True, type=Path)
     parser.add_argument("--isolated", action="store_true", help="only port 39003 on loopback")
     parser.add_argument("--isolated-project", help="unique disposable Docker Compose project")
@@ -301,7 +334,8 @@ def main(argv=None):
         harness = Harness(args.base_url, os.getenv("OSM_API_TEST_TOKEN"),
                           os.getenv("OSM_API_TEST_ACCOUNT"), isolated=args.isolated,
                           isolated_project=args.isolated_project,
-                          write_enabled=args.mode == "write-e2e")
+                          write_enabled=args.mode == "write-e2e",
+                          known_way_id=args.known_way_id, bbox=args.bbox)
         if args.mode == "smoke":
             harness.smoke()
         else:
