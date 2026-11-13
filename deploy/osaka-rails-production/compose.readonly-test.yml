@@ -1,0 +1,16 @@
+# Use only with compose.disposable.yml and an isolated restored database.
+services:
+  web:
+    command: ["/bin/sh", "-ec", "case \"$$DATABASE_URL\" in postgresql://osm_rails_preflight_ro:*) ;; *) exit 1;; esac; exec bundle exec rails s -p 3000 -b 0.0.0.0"]
+    environment:
+      OSM_RAILS_READONLY_PREFLIGHT: "true"
+      PGOPTIONS: "-c default_transaction_read_only=on"
+    networks:
+      isolated:
+        ipv4_address: ${OSM_TEST_CANDIDATE_IP:?pin test web IP}
+
+networks:
+  isolated:
+    ipam:
+      config:
+        - subnet: ${OSM_TEST_SUBNET:?pin isolated subnet}

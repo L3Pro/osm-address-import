@@ -1,0 +1,28 @@
+# Database-only restore verifier. Never attach this project to the Osaka network.
+services:
+  db:
+    image: ${OSM_DB_IMAGE:?pin the local PostgreSQL image digest}
+    environment:
+      # Required by this image's initialization script; isolation is by project/volume.
+      POSTGRES_DB: openstreetmap
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks: [isolated]
+    mem_limit: 1536m
+    cpus: 1.5
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d openstreetmap"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+volumes:
+  db-data:
+
+networks:
+  isolated:
+    internal: true
+    enable_ipv6: false
+    driver_opts:
+      com.docker.network.bridge.gateway_mode_ipv4: isolated
