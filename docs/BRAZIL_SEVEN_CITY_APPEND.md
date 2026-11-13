@@ -90,7 +90,82 @@ PBF/CSV/dump files remain private and out of Git. A city cannot be `SUCCESS`
 while a critical check lacks passing evidence. Browser-only iD rendering must
 be marked `NOT_VERIFIED` until an authenticated browser check is done.
 
+After the append, run the original eight-check read-only smoke and the optional
+seven-city fixture extension with `python -m osm_address_import.api_harness
+smoke --report REPORT.json --brazil-fixtures config/brazil_api_fixtures.json`.
+The extension adds four GET checks per municipality and keeps the Osaka way and
+bbox fixtures in the original eight checks. Never enable live `write-e2e`.
+
 ## Run-specific outcome
 
-The sanitized outcome and exact per-city figures are added after the staged
-and live validations. Private detailed reports remain under `reports/runs/`.
+Run `20261113-7c4e9a21` appended all seven cities to the existing live
+`openstreetmap` API database. The isolated rehearsal restored a consistent
+snapshot of the Osaka database and passed an authenticated Brazilian node edit:
+changeset create, upload, version readback, and closure. Authenticated Firefox
+opened iD and rendered OSM paths at all seven city centers. This synthetic edit
+was confined to the disposable database; no live write test ran.
+
+The following counts are per municipal extract after exclusion of incomplete
+relations. The Osaka object counts are the captured pre-import database baseline.
+Osaka building and address counts were derived from measured post-import global
+feature totals minus the audited unique Brazilian feature insertions; because
+the baseline database contained Osaka alone, these equal its preserved feature
+counts. The private per-city JSON reports also include raw source counts,
+primary versus dependency counts, existing-before and newly-inserted counts,
+highway and other feature counts, and manifest checksums.
+
+| Area | Nodes | Ways | Relations | Buildings | Address objects | API | Editor |
+|---|---:|---:|---:|---:|---:|---|---|
+| Osaka | 1,865,425 | 364,226 | 4,350 | 282,770 | 5,042 | PASS | Staged PASS; live session pending |
+| Manaus | 708,993 | 88,005 | 649 | 47,436 | 2,064 | PASS | Staged PASS; live session pending |
+| Natal | 214,170 | 43,422 | 1,546 | 10,995 | 3,583 | PASS | Staged PASS; live session pending |
+| Canoas | 103,940 | 20,387 | 789 | 8,647 | 963 | PASS | Staged PASS; live session pending |
+| Novo Hamburgo | 54,963 | 9,603 | 212 | 1,559 | 1,609 | PASS | Staged PASS; live session pending |
+| Itu | 363,107 | 15,720 | 216 | 2,922 | 474 | PASS | Staged PASS; live session pending |
+| Jundiaí | 316,759 | 29,437 | 351 | 5,331 | 697 | PASS | Staged PASS; live session pending |
+| Atibaia | 278,516 | 14,278 | 156 | 4,408 | 562 | PASS | Staged PASS; live session pending |
+
+The seven transactions added **2,039,406 unique nodes, 220,848 unique ways,
+and 3,919 unique relations**. They skipped 1,042 node and four way duplicate
+encounters; all matched version and content. There were zero conflicts and zero
+failed or rolled-back SQL records. Database size grew from 1,539,599,707 to
+3,111,963,995 bytes at the final city audit. Each city report records its own
+duration; the consolidated report totals 1,061.512 seconds including a 22.572
+second pre-SQL Canoas attempt. That first attempt stopped on an Osmium output
+stream parsing error before any SQL was sent. Its `BLOCKED` JSON and Markdown
+reports remain archived as `canoas-attempt-1.*`; the corrected city report
+records the retry.
+
+Post-import live counts are 3,904,831 current nodes, 585,074 current ways,
+and 8,269 current relations. The original 35 users, four OAuth applications,
+and nine changesets remain. Three sampled Osaka object content hashes matched
+the pre-import baseline after every batch. Current-object sequences equal the
+maximum OSM ID in each table, so Rails will allocate above imported IDs.
+`osmium check-refs -r` found no missing references in any prepared Brazilian
+extract. The live database retained its pre-existing Osaka count of zero
+missing way-node references and 72,320 missing relation-member references;
+the Brazilian append introduced no additional unresolved references.
+
+The original read-only Osaka smoke passed **8/8** after import. The expanded
+Osaka plus seven-city read-only suite passed **36/36**. Live Rails on loopback
+port 3003 returned capabilities, representative maps, and sampled node, way,
+and relation XML for every city. The public hostname returned the expected
+Cloudflare Access authentication redirect. The per-city and consolidated final
+audit statuses are `PARTIAL` because a browser authenticated through the live
+Cloudflare Access site has not yet been checked. Staged authenticated iD
+rendering is recorded with map-request and rendered-path counts in each city
+report. A human browser session should verify live login and iD display at the
+eight centers before upgrading those editor validations to `PASS`.
+
+Private detailed JSON, Markdown, manifests, screenshots, logs and source
+artifacts remain under `reports/runs/brazil-seven-cities/20261113-7c4e9a21/`
+and are excluded from Git.
+
+## Completion gate
+
+All seven municipalities must have completed Markdown and JSON import reports
+with source provenance, object and feature statistics, before/after comparison,
+validation results, timing, and final status. A consolidated seven-city report
+must also be generated and verified. This run has those artifacts. Final
+`SUCCESS` remains pending a browser session authenticated through the live
+Cloudflare Access site for Osaka and the seven city editors.

@@ -29,7 +29,8 @@ def webdriver(opener, method, path, payload=None):
     return value
 
 
-def run(project, credentials, run_dir, config, geckodriver):
+def run(project, credentials, run_dir, config, geckodriver,
+        output_name="stage-browser.json", screenshot_prefix="stage-editor"):
     _opener, jar, _login_url, _base = authenticated_session(
         project, credentials, base="https://127.0.0.1:39004")
     session_cookie = next((cookie for cookie in jar if cookie.name == "_osm_session"), None)
@@ -78,11 +79,11 @@ def run(project, credentials, run_dir, config, geckodriver):
             webdriver(opener, "POST", prefix + "/url", {"url": url})
             time.sleep(8)
             webdriver(opener, "POST", prefix + "/execute/sync", {"script": "const f=document.querySelector('#id-embed');const d=f&&f.contentDocument;const b=d&&Array.from(d.querySelectorAll('button')).find(x=>x.textContent.includes('Edit now'));if(b)b.click();return !!b", "args": []})
-            time.sleep(3)
+            time.sleep(15)
             current = webdriver(opener, "GET", prefix + "/url")
             dom = webdriver(opener, "POST", prefix + "/execute/sync", {"script": "const f=document.querySelector('#id-embed');const d=f&&f.contentDocument;const p=d&&d.defaultView&&d.defaultView.performance;return {title:document.title,iframe:!!f,idRoot:!!(d&&d.querySelector('#id-container')),osmPaths:d?d.querySelectorAll('path.osm, path.line, path.area').length:0,mapRequests:p?p.getEntriesByType('resource').filter(x=>x.name.includes('/api/0.6/map')).length:0,iframeBodyLength:d&&d.body?d.body.innerHTML.length:0,bodyLength:document.body.innerHTML.length,errorDialog:document.body.innerText.includes('iD has not been configured')}", "args": []})
             screenshot = webdriver(opener, "GET", prefix + "/screenshot")
-            screenshot_path = run_dir / f"stage-editor-{slug}.png"
+            screenshot_path = run_dir / f"{screenshot_prefix}-{slug}.png"
             screenshot_path.write_bytes(base64.b64decode(screenshot))
             results[slug] = {"url": current, "dom": dom,
                              "screenshot": screenshot_path.name,
@@ -91,7 +92,7 @@ def run(project, credentials, run_dir, config, geckodriver):
                   "external_network": "only cdn.jsdelivr.net allowed by browser proxy; loopback allowed",
                   "cities": results,
                   "status": "PASS" if all(item["status"] == "PASS" for item in results.values()) else "FAIL"}
-        _atomic_text(run_dir / "stage-browser.json",
+        _atomic_text(run_dir / output_name,
                      json.dumps(report, ensure_ascii=False, indent=2, sort_keys=True) + "\n")
         return report
     finally:
@@ -114,9 +115,11 @@ def main():
     parser.add_argument("--run-dir", type=Path, required=True)
     parser.add_argument("--config", type=Path, default=Path("config/brazil_seven_cities.json"))
     parser.add_argument("--geckodriver", default="/snap/bin/geckodriver")
+    parser.add_argument("--output-name", default="stage-browser.json")
+    parser.add_argument("--screenshot-prefix", default="stage-editor")
     args = parser.parse_args()
     print(run(args.project, args.credentials, args.run_dir, args.config,
-              args.geckodriver)["status"])
+              args.geckodriver, args.output_name, args.screenshot_prefix)["status"])
 
 
 if __name__ == "__main__":

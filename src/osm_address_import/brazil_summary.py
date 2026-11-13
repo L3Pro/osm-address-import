@@ -13,8 +13,10 @@ def summarize(run_dir: Path, config: Path):
     spec = json.loads(config.read_text())
     reports = [json.loads((run_dir / f"{city['slug']}.json").read_text())
                for city in spec["cities"]]
+    retry_attempts = [json.loads(path.read_text()) for path in sorted(
+        run_dir.glob("*-attempt-*.json"))]
     baseline = json.loads((run_dir / "osaka-baseline.json").read_text())
-    start = min(item["started_at"] for item in reports if item["started_at"])
+    start = min(item["started_at"] for item in reports + retry_attempts if item["started_at"])
     finish = max(item["finished_at"] for item in reports if item["finished_at"])
     last_size = next((item["database"]["size_after"] for item in sorted(
                       reports, key=lambda item: item["finished_at"] or "", reverse=True)
@@ -22,7 +24,8 @@ def summarize(run_dir: Path, config: Path):
     return write_summary(run_dir, reports, started_at=start, finished_at=finish,
                          database_size_before=baseline["counts"]["size"],
                          database_size_after=last_size,
-                         baseline_id=baseline["baseline_id"], run_id=run_dir.name)
+                         baseline_id=baseline["baseline_id"], run_id=run_dir.name,
+                         retry_attempts=retry_attempts)
 
 
 def main():

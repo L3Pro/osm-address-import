@@ -9,6 +9,7 @@ from osm_address_import.brazil_reports import (
     COUNT_COLUMNS, CRITICAL_CHECKS, METRICS, ReportError, SCHEMA_VERSION,
     validate_city, write_city, write_summary,
 )
+from osm_address_import.brazil_finalize_reports import attach_stage_browser
 
 
 def report(name="Canoas", status="SUCCESS"):
@@ -73,18 +74,46 @@ class BrazilReportsTest(unittest.TestCase):
 
     def test_summary_counts_unique_insertions_separately_from_duplicates(self):
         cities = [report(name=f"city-{i}") for i in range(7)]
+        retry = report(name="city-0", status="BLOCKED")
+        retry["duration_seconds"] = 2.5
         with tempfile.TemporaryDirectory() as temporary:
             summary = write_summary(Path(temporary), cities, started_at="now", finished_at="later",
                                     database_size_before=100, database_size_after=200,
-                                    baseline_id="base-1", run_id="run-1")
+                                    baseline_id="base-1", run_id="run-1",
+                                    retry_attempts=[retry])
         self.assertEqual(summary["unique_newly_inserted"]["nodes"], 56)
         self.assertEqual(summary["totals"]["skipped_duplicates"]["nodes"], 14)
+        self.assertEqual(summary["total_processing_duration_seconds"], 9.5)
+        self.assertEqual(summary["retry_processing_duration_seconds"], 2.5)
 
     def test_credentials_are_rejected(self):
         value = report()
         value["warnings"] = ["Authorization: Bearer abc.secret.token"]
         with self.assertRaises(ReportError):
             validate_city(value)
+
+    def test_staged_browser_evidence_does_not_claim_live_success(self):
+        slugs = ["manaus", "natal", "canoas", "novo-hamburgo", "itu", "jundiai", "atibaia"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "20261113-7c4e9a21"
+            root.mkdir()
+            config = root / "cities-config.json"
+            config.write_text(json.dumps({"cities": [{"slug": slug} for slug in slugs]}))
+            browser = {"status": "PASS", "project": "osaka-api-harness-20261113-7c4e9a21",
+                       "cities": {slug: {"status": "PASS", "dom": {
+                           "mapRequests": 2, "osmPaths": 5, "idRoot": True}} for slug in slugs}}
+            (root / "stage-browser.json").write_text(json.dumps(browser))
+            for slug in slugs:
+                item = report(name=slug, status="PARTIAL")
+                item["validations"]["editor"] = {"status": "NOT_VERIFIED", "evidence": None}
+                write_city(root, slug, item)
+            attach_stage_browser(root, config)
+            for slug in slugs:
+                item = json.loads((root / f"{slug}.json").read_text())
+                self.assertEqual(item["status"], "PARTIAL")
+                self.assertEqual(item["validations"]["editor"]["status"], "NOT_VERIFIED")
+                self.assertIn("Live Cloudflare-authenticated browser session: NOT_VERIFIED",
+                              item["validations"]["editor"]["evidence"])
 
 
 if __name__ == "__main__":

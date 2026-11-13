@@ -42,5 +42,7 @@ objects, existing/duplicate/conflict/failed/rolled-back totals, cumulative
 processing duration, database sizes before/after, Osaka validation status, and
 overall status. Global new-object totals sum committed per-city new IDs;
 previously inserted shared IDs become duplicates in later cities and are not
-counted again. Secrets, bearer tokens, passwords, dumps, extracts, and raw
+counted again. The processing duration includes archived retry attempts; their
+statuses and durations appear separately in `retry_attempts`. Secrets, bearer
+tokens, passwords, dumps, extracts, and raw
 manifests must not be committed or embedded in reports.

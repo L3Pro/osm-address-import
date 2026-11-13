@@ -162,10 +162,14 @@ def write_city(run_dir: Path, slug: str, report: dict):
 
 
 def write_summary(run_dir: Path, reports: list[dict], *, started_at, finished_at,
-                  database_size_before, database_size_after, baseline_id, run_id):
+                  database_size_before, database_size_after, baseline_id, run_id,
+                  retry_attempts=None):
     if len(reports) != 7 or len({item["city"] for item in reports}) != 7:
         raise ReportError("summary requires seven distinct city reports")
     for item in reports:
+        validate_city(item)
+    retry_attempts = retry_attempts or []
+    for item in retry_attempts:
         validate_city(item)
     totals = {key: {typ: sum(item["objects"][key][typ] for item in reports)
                     for typ in ("nodes", "ways", "relations")}
@@ -177,8 +181,14 @@ def write_summary(run_dir: Path, reports: list[dict], *, started_at, finished_at
     )
     summary = {"schema_version": SCHEMA_VERSION, "run_id": run_id, "baseline_id": baseline_id,
                "started_at": started_at, "finished_at": finished_at, "status": status,
-               "total_processing_duration_seconds": sum(
-                   item["duration_seconds"] or 0 for item in reports),
+               "total_processing_duration_seconds": round(sum(
+                   item["duration_seconds"] or 0 for item in reports + retry_attempts), 3),
+               "retry_processing_duration_seconds": round(sum(
+                   item["duration_seconds"] or 0 for item in retry_attempts), 3),
+               "retry_attempts": [{"city": item["city"], "status": item["status"],
+                                   "started_at": item["started_at"],
+                                   "duration_seconds": item["duration_seconds"]}
+                                  for item in retry_attempts],
                "osaka_validation": "PASS" if all(
                    item["validations"]["osaka_preservation"]["status"] == "PASS"
                    for item in reports) else "NOT_VERIFIED",
@@ -195,6 +205,7 @@ def write_summary(run_dir: Path, reports: list[dict], *, started_at, finished_at
         lines.append(f"| {item['city']} | {item['state']} | {item['status']} | {item['duration_seconds']} |")
     lines += ["", f"Unique inserted: `{unique_inserted}`", "",
               f"Database bytes before: `{database_size_before}`; after: `{database_size_after}`.", "",
+              f"Total processing seconds: `{summary['total_processing_duration_seconds']}` (retries: `{summary['retry_processing_duration_seconds']}`).", "",
               "## Accounting", "", "```json", json.dumps(totals, indent=2, sort_keys=True), "```", ""]
     _atomic_text(run_dir / "summary.md", "\n".join(lines))
     return summary

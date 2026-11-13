@@ -202,6 +202,42 @@ class Harness:
                      lambda body, ct: "malformed ID rejected")
         self.request("GET", "/api/0.6/map?bbox=not-a-bbox", {400},
                      lambda body, ct: "malformed bbox rejected")
+
+    def brazil_smoke(self, fixtures):
+        """Optional read-only coverage for the seven imported municipalities."""
+        expected = {"manaus", "natal", "canoas", "novo-hamburgo", "itu",
+                    "jundiai", "atibaia"}
+        if set(fixtures) != expected:
+            raise HarnessError("Brazil fixture file must contain exactly seven cities")
+        for city, fixture in fixtures.items():
+            if not isinstance(fixture, dict):
+                raise HarnessError(f"invalid {city} fixture")
+            for kind in ("node", "way", "relation"):
+                obj_id = checked_way_id(str(fixture[f"{kind}_id"]))
+
+                def check_object(body, content_type, kind=kind, obj_id=obj_id, city=city):
+                    root = xml_root(body)
+                    obj = root.find(kind)
+                    if (obj is None or positive_id(obj.get("id"), kind) != obj_id
+                            or "xml" not in content_type):
+                        raise HarnessError(f"{city} {kind} readback mismatch")
+                    if kind == "way" and not obj.findall("nd"):
+                        raise HarnessError(f"{city} way has no node references")
+                    return f"{city} {kind} {obj_id} returned valid OSM XML"
+
+                self.request("GET", f"/api/0.6/{kind}/{obj_id}", {200}, check_object)
+            bbox = checked_bbox(fixture["bbox"])
+
+            def check_city_map(body, content_type, city=city):
+                root = xml_root(body)
+                if ("xml" not in content_type or root.find("bounds") is None
+                        or not root.findall("node") or not root.findall("way")):
+                    raise HarnessError(f"{city} map lacks bounds, nodes, or ways")
+                return f"{city} map: {len(root.findall('node'))} nodes, {len(root.findall('way'))} ways"
+
+            self.request("GET", f"/api/0.6/map?{urlencode({'bbox': bbox})}",
+                         {200}, check_city_map)
+
     def write_e2e(self):
         if (not self.write_enabled or not self.isolated_project
                 or os.getenv("OSM_API_WRITE_E2E") != WRITE_CONFIRMATION
@@ -318,6 +354,8 @@ def main(argv=None):
     parser.add_argument("--known-way-id", default=DEFAULT_KNOWN_WAY_ID)
     parser.add_argument("--bbox", default=DEFAULT_BBOX)
     parser.add_argument("--report", required=True, type=Path)
+    parser.add_argument("--brazil-fixtures", type=Path,
+                        help="optional seven-city read-only geographic fixtures")
     parser.add_argument("--isolated", action="store_true", help="only port 39003 on loopback")
     parser.add_argument("--isolated-project", help="unique disposable Docker Compose project")
     parser.add_argument("--allow-write", action="store_true")
@@ -338,6 +376,8 @@ def main(argv=None):
                           known_way_id=args.known_way_id, bbox=args.bbox)
         if args.mode == "smoke":
             harness.smoke()
+            if args.brazil_fixtures:
+                harness.brazil_smoke(json.loads(args.brazil_fixtures.read_text()))
         else:
             harness.write_e2e()
     except Exception as exc:
