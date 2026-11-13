@@ -1,0 +1,46 @@
+# Always use -p osaka-api-harness-YYYYMMDD-8hex after the fresh-project check.
+services:
+  db:
+    image: ${OSM_DB_IMAGE:?pin a local database image digest}
+    environment:
+      POSTGRES_DB: openstreetmap
+      POSTGRES_HOST_AUTH_METHOD: trust
+    volumes:
+      - db-data:/var/lib/postgresql/data
+    networks: [isolated]
+    mem_limit: 1536m
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d openstreetmap"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+
+  web:
+    image: ${OSM_RAILS_IMAGE:?pin a local production Rails image digest}
+    command: ["bundle", "exec", "rails", "s", "-p", "3000", "-b", "0.0.0.0"]
+    working_dir: /app
+    env_file: ${OSM_PRIVATE_ENV_FILE:?private disposable environment required}
+    environment:
+      RAILS_ENV: production
+      RACK_ENV: production
+      RAILS_SERVE_STATIC_FILES: "true"
+    volumes:
+      - ${OSM_APP_COPY:?private disposable source copy required}:/app
+      - web-storage:/app/storage
+    ports:
+      - "127.0.0.1:39003:3000"
+    networks: [isolated, frontend]
+    mem_limit: 1024m
+    depends_on:
+      db:
+        condition: service_healthy
+
+volumes:
+  db-data:
+  web-storage:
+
+networks:
+  isolated:
+    internal: true
+  frontend:
+    driver: bridge
