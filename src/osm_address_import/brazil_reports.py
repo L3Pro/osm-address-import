@@ -203,6 +203,18 @@ def write_summary(run_dir: Path, reports: list[dict], *, started_at, finished_at
              "| City | State | Status | Seconds |", "|---|---|---|---:|"]
     for item in reports:
         lines.append(f"| {item['city']} | {item['state']} | {item['status']} | {item['duration_seconds']} |")
+    lines += ["", f"Osaka preservation: **{summary['osaka_validation']}**", "",
+              "## Validation status", "",
+              "| City | API reads/map | References | Editor | Database/Rails | Import |",
+              "|---|---|---|---|---|---|"]
+    for item in reports:
+        checks = item["validations"]
+        api_keys = ("api_nodes", "api_ways", "api_relations", "api_map")
+        api_status = "PASS" if all(checks[key]["status"] == "PASS" for key in api_keys) else "NOT_VERIFIED"
+        health_status = "PASS" if all(checks[key]["status"] == "PASS" for key in
+                                      ("database_health", "rails_health")) else "NOT_VERIFIED"
+        lines.append(f"| {item['city']} | {api_status} | {checks['references']['status']} | "
+                     f"{checks['editor']['status']} | {health_status} | {item['status']} |")
     lines += ["", f"Unique inserted: `{unique_inserted}`", "",
               f"Database bytes before: `{database_size_before}`; after: `{database_size_after}`.", "",
               f"Total processing seconds: `{summary['total_processing_duration_seconds']}` (retries: `{summary['retry_processing_duration_seconds']}`).", "",

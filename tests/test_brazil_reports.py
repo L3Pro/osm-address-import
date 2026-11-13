@@ -81,10 +81,13 @@ class BrazilReportsTest(unittest.TestCase):
                                     database_size_before=100, database_size_after=200,
                                     baseline_id="base-1", run_id="run-1",
                                     retry_attempts=[retry])
+            markdown = (Path(temporary) / "summary.md").read_text()
         self.assertEqual(summary["unique_newly_inserted"]["nodes"], 56)
         self.assertEqual(summary["totals"]["skipped_duplicates"]["nodes"], 14)
         self.assertEqual(summary["total_processing_duration_seconds"], 9.5)
         self.assertEqual(summary["retry_processing_duration_seconds"], 2.5)
+        self.assertIn("## Validation status", markdown)
+        self.assertIn("Osaka preservation: **PASS**", markdown)
 
     def test_credentials_are_rejected(self):
         value = report()
