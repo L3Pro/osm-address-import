@@ -6,11 +6,12 @@ Report filenames are discovered server-side. Browser input is never a filesystem
 from __future__ import annotations
 
 import json
+import hashlib
 import re
 import unicodedata
 from pathlib import Path
 
-from osm_address_import.brazil_reports import METRICS, ReportError, validate_city
+from osm_address_import.brazil_reports import CHECK_STATUSES, METRICS, ReportError, validate_city
 
 MAX_REPORT_BYTES = 1_000_000
 SAFE_ID = re.compile(r"[a-zA-Z0-9][a-zA-Z0-9_-]{0,99}\Z")
@@ -28,8 +29,26 @@ def shown(value, missing="Not recorded"):
 
 
 class ReportRepository:
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, *, require_publication: bool = False):
         self.root = Path(root).resolve()
+        self.require_publication = require_publication
+
+    def _publication(self, directory: Path):
+        path = directory / "publication.json"
+        try:
+            if not self._safe_file(path) or path.stat().st_size > 65_536:
+                return None
+            value = json.loads(path.read_text(encoding="utf-8"))
+            files = value.get("files")
+            if (value.get("schema_version") != "1.0" or value.get("run_id") != directory.name or
+                    not isinstance(files, dict) or "summary.json" not in files or "osaka-baseline.json" not in files):
+                return None
+            if any(not re.fullmatch(r"[a-z0-9-]+\.(?:json|md)", name) or
+                   not re.fullmatch(r"[0-9a-f]{64}", digest) for name, digest in files.items()):
+                return None
+            return files
+        except (OSError, UnicodeError, ValueError, TypeError, AttributeError):
+            return None
 
     def _safe_file(self, path: Path) -> bool:
         try:
@@ -41,6 +60,10 @@ class ReportRepository:
         if not self._safe_file(path):
             raise ReportError("report unavailable or unsafe")
         value = path.read_text(encoding="utf-8")
+        if self.require_publication:
+            published = self._publication(path.parent)
+            if not published or published.get(path.name) != hashlib.sha256(value.encode("utf-8")).hexdigest():
+                raise ReportError("report is not in the approved publication manifest")
         if SECRET.search(value):
             raise ReportError("report contains credential-like content")
         return value
@@ -59,13 +82,15 @@ class ReportRepository:
         if not family.is_dir() or family.is_symlink():
             return
         for directory in sorted(family.iterdir()):
-            if directory.is_dir() and not directory.is_symlink() and SAFE_ID.fullmatch(directory.name):
+            if (directory.is_dir() and not directory.is_symlink() and SAFE_ID.fullmatch(directory.name) and
+                    (not self.require_publication or self._publication(directory))):
                 yield directory
 
     def _scan(self):
         runs, attempts, baselines, warnings = {}, [], [], []
         for directory in self._run_dirs():
             run_id = directory.name
+            published = self._publication(directory) if self.require_publication else None
             summary_path = directory / "summary.json"
             if self._safe_file(summary_path):
                 try:
@@ -78,14 +103,22 @@ class ReportRepository:
                     if any(key not in summary for key in required) or not isinstance(summary["cities"], list):
                         raise ReportError("incomplete summary")
                     if (not isinstance(summary["unique_newly_inserted"], dict) or
-                            any(key not in summary["unique_newly_inserted"] for key in ("nodes", "ways", "relations")) or
+                            any(type(summary["unique_newly_inserted"].get(key)) is not int or
+                                summary["unique_newly_inserted"][key] < 0 for key in ("nodes", "ways", "relations")) or
                             not isinstance(summary["retry_attempts"], list) or
-                            not isinstance(summary["osaka_editor_validation"], dict)):
+                            not isinstance(summary["osaka_editor_validation"], dict) or
+                            summary["osaka_editor_validation"].get("status") not in CHECK_STATUSES or
+                            any(not isinstance(item, dict) or any(key not in item for key in ("city", "state", "status", "duration_seconds"))
+                                for item in summary["cities"]) or
+                            any(not isinstance(item, dict) or any(key not in item for key in ("city", "status", "started_at", "duration_seconds"))
+                                for item in summary["retry_attempts"])):
                         raise ReportError("malformed summary accounting")
                     runs[run_id] = summary
                 except (ReportError, ValueError, TypeError, AttributeError, UnicodeError, OSError) as exc:
                     warnings.append(f"{run_id}: summary unavailable ({exc})")
             for path in sorted(directory.glob("*.json")):
+                if published is not None and path.name not in published:
+                    continue
                 if path.name in ("summary.json", "osaka-baseline.json") or not SAFE_STEM.fullmatch(path.stem):
                     continue
                 if (path.stem.startswith(("stage-", "osaka-", "operator-", "closeout-", "rehearsal-", "brazil-")) or

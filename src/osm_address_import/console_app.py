@@ -1,4 +1,4 @@
-"""Local-only browser for approved historical OSM sandbox audit reports."""
+"""Read-only browser for approved historical OSM sandbox audit reports."""
 
 from __future__ import annotations
 
@@ -7,31 +7,54 @@ import ipaddress
 import os
 from pathlib import Path
 
-from flask import Flask, Response, abort, render_template, request
+from flask import Flask, Response, abort, g, jsonify, render_template, request
 
 from osm_address_import.brazil_reports import COUNT_COLUMNS, METRICS, ReportError
+from osm_address_import.console_auth import (
+    AuthenticationError, AuthorizationError, CloudflareAccessVerifier,
+    ConsoleAuthorization, RolePolicy, VerificationUnavailable,
+)
 from osm_address_import.console_data import ReportRepository, shown
 
 
-def create_app(reports_root="reports/runs", *, development_mode=False):
+def create_app(reports_root="reports/runs", *, development_mode=False, auth=None,
+               published_only=False):
     if development_mode and os.getenv("OSM_CONSOLE_ENV") == "production":
         raise ValueError("development bypass is forbidden in production")
+    if development_mode and auth is not None:
+        raise ValueError("development bypass and production authorization cannot coexist")
     app = Flask(__name__, template_folder="templates", static_folder="static")
-    app.config["REPORTS"] = ReportRepository(reports_root)
+    app.config["REPORTS"] = ReportRepository(reports_root, require_publication=published_only)
     app.config["DEV_MODE"] = development_mode
+    app.config["AUTH"] = auth
     app.jinja_env.filters["shown"] = shown
     app.jinja_env.filters["count"] = lambda value: "Unknown" if value is None else f"{value:,}"
 
     @app.before_request
     def require_access():
-        # JWT authentication is intentionally deferred. No proxy identity header is trusted.
         try:
             loopback = ipaddress.ip_address(request.remote_addr or "").is_loopback
         except ValueError:
             loopback = False
-        if (not app.config["DEV_MODE"] or not loopback or
-                request.headers.get("X-Forwarded-For") or request.headers.get("CF-Connecting-IP")):
+        if not loopback:
             abort(403)
+        if request.path == "/livez":
+            return None  # Local process liveness reveals no report or identity data.
+        if app.config["DEV_MODE"]:
+            if request.headers.get("X-Forwarded-For") or request.headers.get("CF-Connecting-IP"):
+                abort(403)
+            return None
+        authorization = app.config["AUTH"]
+        if authorization is None:
+            abort(403)  # Unconfigured application remains closed.
+        try:
+            g.console_role = authorization.authorize(request.headers.get("Cf-Access-Jwt-Assertion"))
+        except AuthenticationError:
+            abort(401)
+        except AuthorizationError:
+            abort(403)
+        except VerificationUnavailable:
+            abort(503)
 
     @app.after_request
     def security_headers(response):
@@ -45,6 +68,16 @@ def create_app(reports_root="reports/runs", *, development_mode=False):
     @app.get("/")
     def index():
         return render_template("console/index.html", inventory=app.config["REPORTS"].inventory())
+
+    @app.get("/livez")
+    def livez():
+        return ("", 204)
+
+    @app.get("/readyz")
+    def readyz():
+        inventory = app.config["REPORTS"].inventory()
+        available = bool(inventory["runs"] and inventory["areas"] and not inventory["warnings"])
+        return jsonify({"application": "ready", "reports": "available" if available else "unavailable"}), (200 if available else 503)
 
     @app.get("/cities/<slug>")
     def city(slug):
@@ -73,6 +106,20 @@ def create_app(reports_root="reports/runs", *, development_mode=False):
         return response
 
     return app
+
+
+def create_production_app():
+    if os.getenv("OSM_CONSOLE_ENV") != "production" or os.getenv("OSM_CONSOLE_DEV_MODE") == "1":
+        raise ValueError("production mode must be explicit and cannot use development bypass")
+    root = os.getenv("OSM_CONSOLE_REPORT_ROOT")
+    role_file = os.getenv("OSM_CONSOLE_ROLE_FILE")
+    issuer = os.getenv("OSM_CONSOLE_ISSUER")
+    audience = os.getenv("OSM_CONSOLE_AUDIENCE")
+    if not root or not Path(root).is_absolute() or not role_file or not issuer or not audience:
+        raise ValueError("production report root, roles, issuer and audience are required")
+    authorization = ConsoleAuthorization(CloudflareAccessVerifier(issuer, audience),
+                                         RolePolicy.from_file(role_file))
+    return create_app(root, auth=authorization, published_only=True)
 
 
 def main():
