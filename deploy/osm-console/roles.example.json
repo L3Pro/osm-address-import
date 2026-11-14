@@ -1,0 +1,4 @@
+{
+  "viewer": ["viewer@example.invalid"],
+  "administrator": ["administrator@example.invalid"]
+}
