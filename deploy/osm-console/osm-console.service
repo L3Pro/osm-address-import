@@ -1,0 +1,40 @@
+[Unit]
+Description=Read-only OSM Sandbox Console
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=osm-console
+Group=osm-console
+WorkingDirectory=/opt/osm-console/current
+Environment=PYTHONPATH=/opt/osm-console/current/src
+EnvironmentFile=/etc/osm-console/console.env
+ExecStart=/opt/osm-console/venv/bin/gunicorn --bind 127.0.0.1:8765 --workers 1 --threads 2 --timeout 30 --worker-tmp-dir /run/osm-console --no-control-socket --access-logfile - --error-logfile - osm_address_import.console_wsgi:app
+Restart=on-failure
+RestartSec=5s
+RuntimeDirectory=osm-console
+RuntimeDirectoryMode=0700
+UMask=0077
+MemoryMax=256M
+CPUQuota=50%
+TasksMax=32
+LimitNOFILE=1024
+NoNewPrivileges=yes
+CapabilityBoundingSet=
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectHome=yes
+ProtectSystem=strict
+InaccessiblePaths=-/var/run/docker.sock
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+LockPersonality=yes
+RestrictSUIDSGID=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+StandardOutput=journal
+StandardError=journal
+
+[Install]
+WantedBy=multi-user.target
