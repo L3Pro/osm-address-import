@@ -1,0 +1,98 @@
+{% extends 'console/base.html' %}{% block title %}Inventory · OSM Sandbox Console{% endblock %}
+{% block content %}
+<div class="intro">
+<p class="eyebrow">Geographic inventory</p>
+<h1>Loaded areas and audit history</h1>
+<p>Each area shows the latest successful audited record. Historical blocked or failed attempts remain separate.</p>
+</div>
+<div class="stats">
+<div>
+<strong>{{ inventory.areas|length }}</strong>
+<span>Known areas</span>
+</div>
+<div>
+<strong>{{ inventory.successful_cities }}</strong>
+<span>Verified Brazil imports</span>
+</div>
+<div>
+<strong>{{ inventory.failed_attempts }}</strong>
+<span>Failed or blocked attempts</span>
+</div>
+<div>
+<strong class="small">{{ inventory.latest_import|shown }}</strong>
+<span>Most recent import finish</span>
+</div>
+</div>
+{% if inventory.warnings %}
+<section class="notice">
+<h2>Report warnings</h2>
+<ul>
+{% for warning in inventory.warnings %}
+<li>{{ warning }}</li>
+{% endfor %}
+</ul>
+</section>
+{% endif %}
+<section>
+<div class="section-head">
+<h2>Areas</h2>
+<span>Counts are per area; shared objects can overlap.</span>
+</div>
+<div class="table-scroll">
+<table>
+<thead>
+<tr>
+<th>Area</th>
+<th>Boundary</th>
+<th>Source / snapshot</th>
+<th>Import / capture</th>
+<th>Nodes</th>
+<th>Ways</th>
+<th>Relations</th>
+<th>Buildings</th>
+<th>Addresses</th>
+<th>Status</th>
+<th>Validation</th>
+</tr>
+</thead>
+<tbody>
+{% for area in inventory.areas %}{% set r = area.loaded.report if area.loaded else none %}{% set b = area.baseline.data if area.baseline is defined else none %}
+<tr>
+<td>
+<a class="area" href="{{ url_for('city',slug=area.slug) }}">{{ area.name }}</a>
+<small>{{ area.country }} · {{ area.region }}</small>
+</td>
+<td>{{ area.relation_id|shown }}</td>
+<td>{{ r.source.provider|shown if r else 'Not recorded' }}<small>{{ r.source.snapshot_at|shown if r else 'Not recorded' }}</small>
+</td>
+<td>{{ r.finished_at|shown if r else b.captured_at|shown if b else 'Not recorded' }}<small>{{ 'Import finish' if r else 'Baseline capture' }}</small>
+</td>
+<td>{{ r.metrics.nodes.final_available|count if r else b.counts.nodes|count if b else 'Unknown' }}</td>
+<td>{{ r.metrics.ways.final_available|count if r else b.counts.ways|count if b else 'Unknown' }}</td>
+<td>{{ r.metrics.relations.final_available|count if r else b.counts.relations|count if b else 'Unknown' }}</td>
+<td>{{ r.metrics.buildings.final_available|count if r else 'Unknown' }}</td>
+<td>{{ r.metrics.addresses.final_available|count if r else 'Unknown' }}</td>
+<td>
+<span class="pill {{ area.status|lower|replace(' ','-') }}">{{ area.status }}</span>
+</td>
+<td>{{ area.validation }}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+</section>
+<section>
+<div class="section-head">
+<h2>Import runs</h2>
+</div>
+<div class="cards">
+{% for id,run in inventory.runs|dictsort(reverse=true) %}
+<a class="card" href="{{ url_for('run',run_id=id) }}">
+<strong>{{ id }}</strong>
+<span>{{ run.status }} · {{ run.finished_at|shown }}</span>
+</a>
+{% endfor %}
+</div>
+</section>
+{% endblock %}
