@@ -1,10 +1,22 @@
 # OSM Sandbox Console: secure deployment preparation
 
-This document prepares a separate, read-only console origin at `127.0.0.1:8765` for a future Access-protected `osm-console.mapviewer.ai` hostname. **No external route, Access policy, system account or persistent service is installed by this PR.** PR #22 is still an open draft; this branch depends on its tip and must be reviewed after it.
+This document prepares a separate, read-only console origin at `127.0.0.1:8765` for a future Access-protected `osm-console.mapviewer.ai` hostname. **No external route, Access policy, system account or persistent service is installed by this change.** PR #22 and PR #23 were merged in order; the integrated console code is at `50e9a09a25a5b4c67b43f5fca55f7be84d676de2` on `main`.
 
 ## Host audit and boundary
 
 Read-only audit on 2026-11-13 found `main` at `86777d7`, PR #22 open at `f8c7553`, a clean worktree before this branch, and the prior 62-test suite passing. Rails API capabilities returned HTTP 200 on both 127.0.0.1:3002 (rollback) and :3003 (production). `cloudflared.service` was active. Port 8765 had no listener; 3001, 3002 and 3003 were in use. The host had eight cores, about 4 GiB available RAM and 825 GiB free repository disk space. The live `/etc/cloudflared/config.yml` is mode 0600 and unreadable by this account, so its contents and the current Access application/policy cannot be verified here. The host uses systemd units, including cloudflared; no console account exists. Existing unrelated unit configuration should not be copied as a credential-storage pattern.
+
+Phase 1.7 rechecked the merged PRs and found the host account and `/opt/osm-console`, `/etc/osm-console`, and `/var/lib/osm-console/reports` still absent. Noninteractive `sudo` requires an operator password. The existing sandbox redirects unauthenticated requests to `blocnav.cloudflareaccess.com`; that team's public JWKS endpoint returned two RSA keys. This identifies the observed sandbox Access team, **not** a verified issuer or AUD for a new console application. The private tunnel file, Access policies and approved identities remain unavailable to this account. The proposed console hostname does not resolve yet.
+
+An authorized operator can inspect the live ingress without printing credentials or editing it:
+
+```bash
+cloudflared tunnel --config /etc/cloudflared/config.yml ingress validate
+cloudflared tunnel --config /etc/cloudflared/config.yml ingress rule https://osm-sandbox.mapviewer.ai
+cloudflared tunnel --config /etc/cloudflared/config.yml ingress rule https://osm-console.mapviewer.ai
+```
+
+Review the existing Access application and policy in the Cloudflare account separately; tunnel ingress does not establish the console application's AUD or allowed identities. Keep the existing sandbox route unchanged and add the proposed console hostname only after separate external-routing approval.
 
 The original Canoas attempt's archived JSON/Markdown error text says "prepared PBF has unresolved references." PR #21's [audited closeout](BRAZIL_SEVEN_CITY_APPEND.md) states that an Osmium output-stream parsing error stopped the attempt before SQL. The architecture document now distinguishes the artifact text from the closeout root cause. Historical files were not edited.
 
@@ -54,6 +66,30 @@ The full repository suite passed 70 tests after these changes. The proposed unit
 ## Deployment procedure — operator execution only
 
 Complete the following on the Ubuntu host after reviewing both PRs and choosing an exact release SHA. Commands are examples to review for the host; none are run by this PR.
+
+### Staged local installation helper
+
+After the console code is merged, [the root-only helper](../deploy/osm-console/operator-local-install.sh) implements the local portions of steps 1–5 without touching Cloudflare, Rails or PostgreSQL. It has four separate phases so an operator can review the publication list before copying reports and configure Access values before starting the unit. It never asks for or stores a password. Run it from an operator-controlled root session (do not put secrets on the command line):
+
+```bash
+repo=/home/ljlambert2/projects/osm-address-import
+sha=50e9a09a25a5b4c67b43f5fca55f7be84d676de2
+run="$repo/reports/runs/brazil-seven-cities/20261113-7c4e9a21"
+bash "$repo/deploy/osm-console/operator-local-install.sh" prepare "$repo" "$sha" "$run"
+# Review the printed filename list and source hashes before the next command.
+bash "$repo/deploy/osm-console/operator-local-install.sh" publish "$repo" "$sha" "$run"
+```
+
+The helper refuses to overwrite an existing release, virtual environment or curated run. If preparation stops partway through, inspect the partial paths rather than removing them blindly. It confirms that the `osm-console` account has no supplementary groups and cannot read the private source run. It archives only reviewed Git-tracked files, installs pinned console dependencies in a root-owned virtual environment, and verifies every published artifact hash as the service account. The expected current publication is 19 approved artifacts plus a private manifest, eight areas, seven final successes and one archived blocked attempt.
+
+After the operator verifies the actual console Access issuer, audience and approved identities, create `/etc/osm-console/console.env` and `roles.json` from the examples, edit them with an operator-controlled editor, and set both files to `root:osm-console` mode `0640`. Then run:
+
+```bash
+bash "$repo/deploy/osm-console/operator-local-install.sh" start "$repo" "$sha" "$run"
+bash "$repo/deploy/osm-console/operator-local-install.sh" verify "$repo" "$sha" "$run"
+```
+
+The start phase rejects development mode and placeholders, validates the role allowlist, installs only `osm-console.service`, and checks loopback liveness and missing-token rejection. Real Access authentication and a signed authorized Viewer request remain separate acceptance checks. The helper does not configure the external hostname or tunnel.
 
 1. **Release and dependencies.** Create root-owned `/opt/osm-console/releases/<SHA>` from the reviewed Git tree and a `current` symlink. Create `/opt/osm-console/venv` and install `requirements-console.txt` there. Provision `python3-venv` through normal host administration if needed. Keep release and venv non-writable by the service user.
 2. **Identity and paths.** Create system account `osm-console` with no login shell or supplementary Docker group. Create `/etc/osm-console` and `/var/lib/osm-console/reports` as root-owned directories. The service account needs traversal/read access only to its role file and curated reports; recommended modes are 0750 for directories and 0640 for files with group `osm-console`. Do not grant access to `/home/ljlambert2/projects/osm-address-import/reports/runs`.
