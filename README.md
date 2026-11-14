@@ -40,9 +40,9 @@ The repository is a **foundation scaffold**, not a working address importer. The
 
 The Python code includes a sandbox endpoint guard, an opt-in Osaka API regression harness, and a guarded [seven-city Brazil OSM append](docs/BRAZIL_SEVEN_CITY_APPEND.md) with [versioned per-city audit reports](docs/BRAZIL_REPORT_SCHEMA.md). Run the offline tests without credentials or datasets:
 
-The local, read-only [OSM Sandbox Console](docs/OSM_SANDBOX_CONSOLE_ARCHITECTURE.md) displays historical geographic inventory and approved audit reports without database or Docker access.
-
     python -m unittest discover -s tests -v
+
+The local, read-only [OSM Sandbox Console](docs/OSM_SANDBOX_CONSOLE_ARCHITECTURE.md) displays historical geographic inventory and approved audit reports without database or Docker access.
 
 The Osaka API read-only smoke and opt-in synthetic edit harness is documented in [Osaka API harness](docs/OSAKA_API_HARNESS.md).
 
