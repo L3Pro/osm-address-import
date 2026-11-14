@@ -1,0 +1,178 @@
+{% extends 'console/base.html' %}{% block title %}{{ area.name }} · OSM Sandbox Console{% endblock %}
+{% block content %}
+<p class="crumb">
+<a href="{{ url_for('index') }}">Inventory</a> / {{ area.name }}</p>
+<div class="intro">
+<p class="eyebrow">Area detail</p>
+<h1>{{ area.name }}</h1>
+<p>{{ area.country }} · {{ area.region }} · boundary relation {{ area.relation_id|shown }} · <span class="pill {{ area.status|lower|replace(' ','-') }}">{{ area.status }}</span>
+</p>
+</div>
+{% if area.baseline is defined %}{% set b = area.baseline.data %}
+<section class="panel">
+<h2>Original Osaka baseline</h2>
+<p>Baseline ID {{ b.baseline_id }}. Captured {{ b.captured_at|shown }}. This capture is not an import timestamp.</p>
+<dl class="facts">
+<div>
+<dt>Nodes</dt>
+<dd>{{ b.counts.nodes|count }}</dd>
+</div>
+<div>
+<dt>Ways</dt>
+<dd>{{ b.counts.ways|count }}</dd>
+</div>
+<div>
+<dt>Relations</dt>
+<dd>{{ b.counts.relations|count }}</dd>
+</div>
+<div>
+<dt>Source provider / snapshot</dt>
+<dd>Not recorded</dd>
+</div>
+<div>
+<dt>Import date / boundary</dt>
+<dd>Not recorded</dd>
+</div>
+<div>
+<dt>Buildings / addresses / highways</dt>
+<dd>Unknown</dd>
+</div>
+</dl>
+<p>Separate Osaka import validation: Not verified. Brazil run Osaka preservation: {{ area.validation }}.{% if area.preservation %} Editor validation: {{ area.preservation.osaka_editor_validation.status }}. Live write: {{ 'verified' if area.preservation.get('live_editor_attestation', {}).get('live_write_verified') else 'NOT VERIFIED' }}.{% endif %}
+</p>
+<p>Inherited unresolved relation-member references at baseline: {{ b.get('reference_missing', {}).get('relation_members')|count }}.</p>
+</section>
+{% else %}{% set item = area.loaded or area.latest %}{% set r = item.report %}
+<section class="panel">
+<h2>Current audited record</h2>
+<p>Run <a href="{{ url_for('run',run_id=r.run_id) }}">{{ r.run_id }}</a> · {{ r.status }}{% if not area.loaded %} · No successful loaded record verified{% endif %}
+</p>
+<dl class="facts">
+<div>
+<dt>Provider</dt>
+<dd>{{ r.source.provider|shown }}</dd>
+</div>
+<div>
+<dt>Source URL</dt>
+<dd>{{ r.source.url|shown }}</dd>
+</div>
+<div>
+<dt>Snapshot</dt>
+<dd>{{ r.source.snapshot_at|shown }}</dd>
+</div>
+<div>
+<dt>Downloaded</dt>
+<dd>{{ r.source.downloaded_at|shown }}</dd>
+</div>
+<div>
+<dt>Filename</dt>
+<dd>{{ r.source.filename|shown }}</dd>
+</div>
+<div>
+<dt>SHA-256</dt>
+<dd class="break">{{ r.source.sha256|shown }}</dd>
+</div>
+<div>
+<dt>Tool</dt>
+<dd>{{ r.tool.name|shown }} {{ r.tool.version|shown }}</dd>
+</div>
+<div>
+<dt>Code commit</dt>
+<dd class="break">{{ r.code_commit|shown }}</dd>
+</div>
+<div>
+<dt>Started</dt>
+<dd>{{ r.started_at|shown }}</dd>
+</div>
+<div>
+<dt>Finished</dt>
+<dd>{{ r.finished_at|shown }}</dd>
+</div>
+<div>
+<dt>Duration</dt>
+<dd>{{ r.duration_seconds|shown }} seconds</dd>
+</div>
+<div>
+<dt>Validation closeout</dt>
+<dd>{{ r.closeout.recorded_at|shown if r.closeout is defined else 'Not recorded' }}</dd>
+</div>
+</dl>
+</section>
+<section>
+<h2>Geographic statistics</h2>
+<p>Source extract, existing objects, inserted objects, and final available objects are separate measures. Feature classes can overlap.</p>
+<div class="table-scroll">
+<table>
+<thead>
+<tr>
+<th>Metric</th>
+{% for col in columns %}
+<th>{{ col|replace('_',' ')|title }}</th>
+{% endfor %}
+</tr>
+</thead>
+<tbody>
+{% for metric in metrics %}
+<tr>
+<th>{{ metric|replace('_',' ')|title }}</th>
+{% for col in columns %}
+<td>{{ r.metrics[metric][col]|count }}</td>
+{% endfor %}
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+</section>
+<section>
+<h2>Object accounting</h2>
+<div class="table-scroll">
+<table>
+<thead>
+<tr>
+<th>Measure</th>
+<th>Nodes</th>
+<th>Ways</th>
+<th>Relations</th>
+</tr>
+</thead>
+<tbody>
+{% for key,row in r.objects|dictsort %}
+<tr>
+<th>{{ key|replace('_',' ')|title }}</th>
+<td>{{ row.nodes|count }}</td>
+<td>{{ row.ways|count }}</td>
+<td>{{ row.relations|count }}</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+</section>
+<section>
+<h2>Validation evidence</h2>
+<p>Editor PASS records visual inspection. Live write: {{ 'verified' if r.get('closeout', {}).get('live_write_verified') else 'NOT VERIFIED' }}.</p>
+<div class="checks">
+{% for key,check in r.validations|dictsort %}
+<div class="check">
+<strong>{{ key|replace('_',' ')|title }}</strong>
+<span class="pill {{ check.status|lower|replace('_','-') }}">{{ check.status|replace('_',' ') }}</span>
+<p>{{ check.evidence|shown('Not verified') }}</p>
+</div>
+{% endfor %}
+</div>
+</section>
+<section>
+<h2>Attempt history</h2>
+{% for attempt in area.history %}
+<div class="history">
+<strong>{{ attempt.report.started_at|shown }}</strong> <span class="pill {{ attempt.report.status|lower }}">{{ attempt.report.status }}</span> {% if attempt.archived %}Archived attempt{% else %}Final report{% endif %}
+<p>Errors: {{ attempt.report.errors|join('; ') if attempt.report.errors else 'None recorded' }}</p>
+<p>Warnings: {{ attempt.report.warnings|join('; ') if attempt.report.warnings else 'None recorded' }}</p>
+<p>
+<a href="{{ url_for('artifact',run_id=attempt.run_id,stem=attempt.stem,extension='json') }}">JSON</a> · <a href="{{ url_for('artifact',run_id=attempt.run_id,stem=attempt.stem,extension='md') }}">Markdown</a> · <a href="{{ url_for('artifact',run_id=attempt.run_id,stem=attempt.stem,extension='json',download=1) }}">Download JSON</a> · <a href="{{ url_for('artifact',run_id=attempt.run_id,stem=attempt.stem,extension='md',download=1) }}">Download Markdown</a>
+</p>
+</div>
+{% endfor %}
+</section>
+{% endif %}{% endblock %}

@@ -1,0 +1,103 @@
+{% extends 'console/base.html' %}{% block title %}Run {{ run_id }} · OSM Sandbox Console{% endblock %}
+{% block content %}{% set s = run.summary %}
+<p class="crumb">
+<a href="{{ url_for('index') }}">Inventory</a> / Run</p>
+<div class="intro">
+<p class="eyebrow">Import history</p>
+<h1>{{ run_id }}</h1>
+<p>
+<span class="pill {{ s.status|lower }}">{{ s.status }}</span> · baseline {{ s.baseline_id|shown }}</p>
+</div>
+<section class="panel">
+<h2>Run timing and outcome</h2>
+<dl class="facts">
+<div>
+<dt>Started</dt>
+<dd>{{ s.started_at|shown }}</dd>
+</div>
+<div>
+<dt>Finished</dt>
+<dd>{{ s.finished_at|shown }}</dd>
+</div>
+<div>
+<dt>Validation closeout</dt>
+<dd>{{ s.closeout_at|shown }}</dd>
+</div>
+<div>
+<dt>Processing duration</dt>
+<dd>{{ s.total_processing_duration_seconds|shown }} seconds</dd>
+</div>
+<div>
+<dt>Retry duration</dt>
+<dd>{{ s.retry_processing_duration_seconds|shown }} seconds</dd>
+</div>
+<div>
+<dt>Database size before</dt>
+<dd>{{ s.database_size_before|count }} bytes</dd>
+</div>
+<div>
+<dt>Database size after</dt>
+<dd>{{ s.database_size_after|count }} bytes</dd>
+</div>
+<div>
+<dt>Osaka preservation</dt>
+<dd>{{ s.osaka_validation|shown }}</dd>
+</div>
+<div>
+<dt>Osaka editor</dt>
+<dd>{{ s.osaka_editor_validation.status|shown if s.osaka_editor_validation is defined else 'Not recorded' }}</dd>
+</div>
+</dl>
+<p>Source provenance and city validation evidence appear in each city report. Live write: NOT VERIFIED.</p>
+<p>
+<a href="{{ url_for('artifact',run_id=run_id,stem='summary',extension='json') }}">View summary JSON</a> · <a href="{{ url_for('artifact',run_id=run_id,stem='summary',extension='md') }}">View summary Markdown</a> · <a href="{{ url_for('artifact',run_id=run_id,stem='summary',extension='json',download=1) }}">Download JSON</a> · <a href="{{ url_for('artifact',run_id=run_id,stem='summary',extension='md',download=1) }}">Download Markdown</a>
+</p>
+</section>
+<section>
+<h2>City results and attempts</h2>
+<div class="table-scroll">
+<table>
+<thead>
+<tr>
+<th>City</th>
+<th>Attempt</th>
+<th>Status</th>
+<th>Source snapshot</th>
+<th>Started</th>
+<th>Finished</th>
+<th>Duration</th>
+<th>Validation</th>
+<th>Audit</th>
+</tr>
+</thead>
+<tbody>
+{% for item in run.cities|sort(attribute='report.started_at') %}{% set r=item.report %}
+<tr>
+<td>
+<a href="{{ url_for('city',slug=item.slug) }}">{{ r.city }}</a>
+</td>
+<td>{{ 'Archived attempt' if item.archived else 'Final report' }}</td>
+<td>
+<span class="pill {{ r.status|lower }}">{{ r.status }}</span>
+</td>
+<td>{{ r.source.provider|shown }}<small>{{ r.source.snapshot_at|shown }}</small>
+</td>
+<td>{{ r.started_at|shown }}</td>
+<td>{{ r.finished_at|shown }}</td>
+<td>{{ r.duration_seconds|shown }} s</td>
+<td>{{ r.validations.values()|selectattr('status','equalto','PASS')|list|length }}/{{ r.validations|length }} PASS</td>
+<td>
+<a href="{{ url_for('artifact',run_id=run_id,stem=item.stem,extension='json') }}">JSON</a> · <a href="{{ url_for('artifact',run_id=run_id,stem=item.stem,extension='md') }}">Markdown</a>
+</td>
+</tr>
+{% endfor %}
+</tbody>
+</table>
+</div>
+</section>
+<section class="panel">
+<h2>Recorded accounting</h2>
+<p>Unique newly inserted IDs across committed city imports: {{ s.unique_newly_inserted.nodes|count }} nodes, {{ s.unique_newly_inserted.ways|count }} ways, {{ s.unique_newly_inserted.relations|count }} relations. These are recorded run totals, not a sum of final available city counts.</p>
+<p>Retries: {% if s.retry_attempts %}{% for a in s.retry_attempts %}{{ a.city }} {{ a.status }} at {{ a.started_at }}{% if not loop.last %}; {% endif %}{% endfor %}{% else %}None recorded{% endif %}.</p>
+</section>
+{% endblock %}

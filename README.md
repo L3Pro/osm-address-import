@@ -42,6 +42,8 @@ The Python code includes a sandbox endpoint guard, an opt-in Osaka API regressio
 
     python -m unittest discover -s tests -v
 
+The local, read-only [OSM Sandbox Console](docs/OSM_SANDBOX_CONSOLE_ARCHITECTURE.md) displays historical geographic inventory and approved audit reports without database or Docker access.
+
 The Osaka API read-only smoke and opt-in synthetic edit harness is documented in [Osaka API harness](docs/OSAKA_API_HARNESS.md).
 
 No NAD downloads, complete OSM extracts, output address lists, API credentials, or employer-proprietary data belong in this repository. See the [data policy](docs/DATA_SOURCES.md).

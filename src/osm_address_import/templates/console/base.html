@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>
+{% block title %}OSM Sandbox Console{% endblock %}
+</title>
+<link rel="stylesheet" href="{{ url_for('static', filename='console/console.css') }}">
+</head>
+<body>
+<header class="top">
+<div class="wrap">
+<a class="brand" href="{{ url_for('index') }}">OSM <span>Sandbox Console</span>
+</a>
+<span class="mode">Historical audit reports · local access</span>
+</div>
+</header>
+<main class="wrap">
+{% block content %}{% endblock %}
+</main>
+<footer class="wrap">Read-only audit view. Values reflect recorded reports, not a live database query.</footer>
+</body>
+</html>
