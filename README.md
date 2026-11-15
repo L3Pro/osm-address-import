@@ -15,7 +15,7 @@ Open-source tooling for carefully evaluating and conflating authoritative addres
 
 ## Current state
 
-The repository includes a dry-run, building-aware address conflation engine; API execution, community authorization, and public uploads are not implemented. See [building conflation contract](docs/BUILDING_CONFLATION_INPUT_OUTPUT.md), [Woodlands pilot](docs/WOODLANDS_CONFLATION_PILOT.md), [Status](docs/STATUS.md), and the open [issues](https://github.com/L3Pro/osm-address-import/issues).
+The repository includes a dry-run, building-aware address conflation engine; API execution, community authorization, and public uploads are not implemented. See [building conflation contract](docs/BUILDING_CONFLATION_INPUT_OUTPUT.md), [private MapViewer export](docs/MAPVIEWER_EXPORT.md), [Woodlands pilot](docs/WOODLANDS_CONFLATION_PILOT.md), [Status](docs/STATUS.md), and the open [issues](https://github.com/L3Pro/osm-address-import/issues).
 
 ## Non-negotiable safety rules
 
