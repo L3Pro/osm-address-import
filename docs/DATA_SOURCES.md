@@ -1,6 +1,6 @@
 # Data sources, licensing, and reproducibility
 
-**Status (2026-10-31): NAD Release 24 is the candidate first dataset, not yet acquired, checksum-pinned, or approved for OSM import. No data has been downloaded into this repository.**
+**Status (2026-11-14): A bounded Release 24 NAD feature-service query was acquired for the ignored [Woodlands dry-run pilot](WOODLANDS_CONFLATION_PILOT.md). The full TXT archive remains unacquired and unpinned. No source is approved for OSM upload, and no source data are committed.**
 
 ## NAD Release 24: confirmed publisher facts
 
