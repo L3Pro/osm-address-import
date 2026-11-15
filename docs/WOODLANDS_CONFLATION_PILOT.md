@@ -75,9 +75,9 @@ because they contain identifiable address records. Do not commit them.
 | Already mapped | 3 |
 | Automatic building attachments | 0 |
 | Multi-address building review | 2 |
-| No-building review | 20 |
+| No-building review | 23 |
 | Conflict review | 0 |
-| Spatial-ambiguity review | 196 |
+| Spatial-ambiguity review | 193 |
 | Source duplicates / invalid | 0 / 0 |
 | Valid OSM buildings in buffered extract | 292 |
 | Existing address-bearing buildings | 10 |
@@ -85,13 +85,30 @@ because they contain identifiable address records. Do not commit them.
 | OSM-only address observations inside study box | 2 |
 | Proposed OSM modifications | 0 |
 
-The two multi-address records refer to one building. Of the 221 source rows,
-167 had exactly one containing building; 13 had more than one building candidate
-within the association search; 20 had none. The remaining rows were near an
-eligible footprint without a reliable interior association. The 196 spatial
+The two multi-address records refer to one building. The spatial categories
+below are mutually exclusive and sum to all 221 source rows:
+
+| Spatial relationship | Records |
+| --- | ---: |
+| Inside exactly one building | 167 |
+| Inside multiple buildings | 0 |
+| On a building boundary | 0 |
+| Near a building but outside its footprint | 31 |
+| No plausible building within 4 m | 23 |
+| Not spatially evaluated | 0 |
+
+Of the 167 inside one building, **105** were blocked only by unknown source
+placement and missing numeric positional accuracy. Another 58 interior
+records had additional spatial review conditions, mainly boundary clearance
+or street context; two were already mapped and two required multi-address
+review. The 193 spatial
 reviews include unknown placement, boundary proximity, outside points, and
-competing buildings. No point was promoted from `Placement=Unknown` to
-rooftop based on containment alone.
+competing building candidates. No point was promoted from
+`Placement=Unknown` to rooftop based on containment alone. The prior pilot
+count of 20 with no plausible building rose to 23 after an exact distance
+filter fixed spatial-index bounding-box hits near interior holes and other
+nonintersecting geometry; those three records moved from spatial review to
+no-building review. Source and OSM input checksums did not change.
 
 The 0/218 automatic candidate fraction is a **proxy among unmapped valid unique
 source addresses**, not the requested percentage of verified genuinely missing

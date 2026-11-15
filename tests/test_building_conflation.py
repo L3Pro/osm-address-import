@@ -145,6 +145,28 @@ class ConflationTests(unittest.TestCase):
         self.assertEqual(results[0]["primary_decision"], "REVIEW_MULTIPLE_ADDRESSES")
         self.assertFalse(updates)
 
+    def test_existing_unit_and_second_unit_are_distinct(self):
+        entrance = {"type": "node", "id": 901, "version": 2, "lon": LON,
+                    "lat": LAT, "tags": {"entrance": "yes", "addr:housenumber": "123",
+                                        "addr:street": "Main Street", "addr:unit": "1"}}
+        rows = [candidate(candidate_id="u1", source_record_id="u1", unit="1"),
+                candidate(candidate_id="u2", source_record_id="u2", unit="2")]
+        results, updates, _, _, _ = self.decide(rows, [entrance])
+        self.assertEqual(results[0]["primary_decision"], "ALREADY_MAPPED")
+        self.assertEqual(results[1]["primary_decision"], "REVIEW_MULTIPLE_ADDRESSES")
+        self.assertEqual(updates, [])
+
+    def test_nearby_address_entrance_semantics(self):
+        for lon in (LON + .0001, LON + .000115):
+            with self.subTest(lon=lon):
+                entrance = {"type": "node", "id": 902, "version": 2, "lon": lon,
+                            "lat": LAT, "tags": {"entrance": "yes", "addr:housenumber": "123",
+                                                "addr:street": "Main Street"}}
+                results, updates, _, _, _ = self.decide([candidate()], [entrance])
+                self.assertEqual(results[0]["primary_decision"], "ALREADY_MAPPED")
+                self.assertEqual(results[0]["spatial_relationship"], "INSIDE_ONE_BUILDING")
+                self.assertEqual(updates, [])
+
     def test_existing_building_address(self):
         results, updates, _, _, _ = self.decide([candidate()], base_tags={"addr:housenumber": "123", "addr:street": "Main St"})
         self.assertEqual(results[0]["primary_decision"], "ALREADY_MAPPED")
@@ -178,6 +200,7 @@ class ConflationTests(unittest.TestCase):
         other = square(way_id=20, west=LON - .00006, east=LON + .00006)
         r, updates, _, _, _ = self.decide([candidate()], other)
         self.assertEqual(r[0]["primary_decision"], "REVIEW_SPATIAL_AMBIGUITY")
+        self.assertEqual(r[0]["spatial_relationship"], "INSIDE_MULTIPLE_BUILDINGS")
         self.assertIn("OVERLAPPING_BUILDINGS", r[0]["reason_codes"])
 
     def test_outside_building_never_nearest_auto(self):
@@ -216,6 +239,84 @@ class ConflationTests(unittest.TestCase):
                          ("relation", 55, 4))
         self.assertEqual(updates[0]["preserved_geometry"]["relation_members"],
                          [{"type": "way", "ref": 10, "role": "outer"}])
+
+    def test_complex_multipolygon_split_outers_and_interior_hole(self):
+        elements = [{"type": "way", "id": 77, "version": 1,
+                     "tags": {"highway": "residential", "name": "Main Street"}, "nodes": []}]
+        members = []
+        next_node, next_way = 1000, 2000
+
+        def ring(west, south, east, north, role):
+            nonlocal next_node, next_way
+            corners = [(west, south), (east, south), (east, north), (west, north)]
+            ids = []
+            for lon, lat in corners:
+                ids.append(next_node)
+                elements.append({"type": "node", "id": next_node, "version": 1,
+                                 "lon": lon, "lat": lat, "tags": {}})
+                next_node += 1
+            for i in range(4):
+                elements.append({"type": "way", "id": next_way, "version": 1,
+                                 "nodes": [ids[i], ids[(i + 1) % 4]], "tags": {}})
+                members.append({"type": "way", "ref": next_way, "role": role})
+                next_way += 1
+
+        ring(LON-.0003, LAT-.0003, LON+.0003, LAT+.0003, "outer")
+        ring(LON+.0009, LAT-.0001, LON+.0011, LAT+.0001, "outer")
+        ring(LON-.00012, LAT-.00012, LON+.00012, LAT+.00012, "inner")
+        elements.append({"type": "relation", "id": 55, "version": 4,
+                         "tags": {"type": "multipolygon", "building": "yes"}, "members": members})
+        path = self.path / "complex.json"
+        path.write_text(json.dumps({"elements": elements}))
+        osm = read_osm(path)
+        self.assertEqual(len(osm["buildings"]), 1)
+        self.assertEqual(osm["buildings"][0]["geometry"].geom_type, "MultiPolygon")
+        for lon in (LON+.0002, LON+.001):
+            with self.subTest(lon=lon):
+                results, updates, _, _, _ = run([candidate(longitude=lon)], osm)
+                self.assertEqual(results[0]["primary_decision"], "AUTO_ATTACH_CANDIDATE")
+                self.assertEqual(updates[0]["target_osm_id"], 55)
+        results, updates, _, _, _ = run([candidate()], osm)
+        self.assertEqual(results[0]["spatial_relationship"], "NO_PLAUSIBLE_BUILDING")
+        self.assertEqual(results[0]["primary_decision"], "REVIEW_NO_BUILDING")
+        self.assertEqual(updates, [])
+        # An open inner ring must invalidate the relation, not silently fill the hole.
+        elements[-1]["members"] = members[:-1]
+        path.write_text(json.dumps({"elements": elements}))
+        broken = read_osm(path)
+        self.assertIn("relation/55", broken["invalid_buildings"])
+        self.assertFalse(run([candidate(longitude=LON+.0002)], broken)[1])
+
+    def test_shared_boundary_and_exclusive_spatial_report(self):
+        elements = square(20, west=LON-.0002, east=LON)
+        elements += square(30, west=LON, east=LON+.0002)
+        elements.append({"type": "way", "id": 77, "version": 1,
+                         "tags": {"highway": "residential", "name": "Main Street"}, "nodes": []})
+        path = self.path / "adjacent.json"
+        path.write_text(json.dumps({"elements": elements}))
+        osm = read_osm(path)
+        rows = [candidate("101", longitude=LON-.00015, source_location_type="unknown",
+                          positional_accuracy_m=None),
+                candidate("102", longitude=LON+.00015),
+                candidate("103"), candidate("104", longitude=LON+.00022),
+                candidate("105", longitude=LON+.01)]
+        results, updates, _, _, _ = run(rows, osm)
+        self.assertEqual([r["spatial_relationship"] for r in results],
+                         ["INSIDE_ONE_BUILDING", "INSIDE_ONE_BUILDING", "ON_BUILDING_BOUNDARY",
+                          "NEAR_OUTSIDE_BUILDING", "NO_PLAUSIBLE_BUILDING"])
+        self.assertEqual(results[2]["reason_codes"], ["SHARED_BUILDING_BOUNDARY"])
+        self.assertEqual(results[0]["reason_codes"],
+                         ["UNSUPPORTED_SOURCE_POSITION_TYPE", "INSUFFICIENT_POSITIONAL_ACCURACY"])
+        self.assertEqual(len(updates), 1)
+        source = self.path / "source.csv"
+        source.write_text("synthetic checksum only\n")
+        report = write_artifacts(self.path / "out", rows, osm, *run(rows, osm),
+                                 source, path, .01, "adjacent synthetic buildings")
+        self.assertEqual(report["candidate_to_building_relationships"], {
+            "INSIDE_ONE_BUILDING": 2, "INSIDE_MULTIPLE_BUILDINGS": 0,
+            "ON_BUILDING_BOUNDARY": 1, "NEAR_OUTSIDE_BUILDING": 1,
+            "NO_PLAUSIBLE_BUILDING": 1, "NOT_EVALUATED": 0})
+        self.assertEqual(report["inside_one_blocked_only_by_source_position_or_accuracy"], 1)
 
     def test_non_rooftop_and_missing_evidence(self):
         for changes in ({"source_location_type": "parcel"}, {"source_location_type": "unknown"},

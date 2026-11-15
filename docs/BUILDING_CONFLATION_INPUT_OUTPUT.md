@@ -55,6 +55,9 @@ search radius. Duplicate acceptance additionally requires the equivalent OSM
 object to belong to the building or be within 4 m of the source point. These
 thresholds are arguments to the Python `run` function and are recorded in the
 report. No percentage score or nearest-building selection is used.
+The spatial index supplies possible polygons; an exact geometry-distance check
+removes bounding-box hits, including points in interior holes. Boundary points
+are distinct from points strictly inside a footprint.
 
 ## Outputs
 
@@ -64,6 +67,12 @@ All six required files are produced in `--output`:
   OSM URL, study bounds, and thresholds.
 - `import_assessment.json` and `.md`: mutually exclusive row counts,
   building and OSM-only counts, processing time, warnings and limitations.
+  `candidate_to_building_relationships` partitions all rows into
+  `INSIDE_ONE_BUILDING`, `INSIDE_MULTIPLE_BUILDINGS`, `ON_BUILDING_BOUNDARY`,
+  `NEAR_OUTSIDE_BUILDING`, `NO_PLAUSIBLE_BUILDING`, and `NOT_EVALUATED`.
+  `inside_one_blocked_only_by_source_position_or_accuracy` counts the subset
+  of interior, unmapped reviews whose only remaining blockers are source
+  placement type or positional accuracy. Source blocker counts can overlap.
 - `proposed_building_updates.json`: dry-run update records. Each stores the
   candidate and source lineage, target OSM type/ID/version, original and
   proposed tag dictionaries, added tags, geometry and references, OSM metadata,
@@ -71,11 +80,13 @@ All six required files are produced in `--output`:
   `execution_authorized: false`.
 - `manual_review.json` and `.geojson`: one record per nonautomatic source row,
   with its point, decision, reasons, candidate buildings, OSM addresses,
-  conflicts, and recommended review action. Invalid coordinates produce null
+  spatial relationship, conflicts, and recommended review action. Invalid coordinates produce null
   GeoJSON geometry.
 
 `validation_sample.json` is an additional reproducible sample: up to three
-rows per decision, sorted by candidate ID. `OSM_ONLY` is an observation about
+rows per decision and spatial relationship, plus up to three blocked solely by
+source position or accuracy, sorted by candidate ID within each category.
+Repeated selections appear once. `OSM_ONLY` is an observation about
 OSM features in the selected study scope, not a source row decision.
 
 All real source and OSM files and all generated run artifacts belong under

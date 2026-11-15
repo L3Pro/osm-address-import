@@ -18,7 +18,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from shapely.geometry import LineString, Point, Polygon, box, mapping
-from shapely.ops import polygonize, transform, unary_union
+from shapely.ops import polygonize_full, transform, unary_union
 from shapely.strtree import STRtree
 
 SCHEMA = "1.0"
@@ -26,6 +26,11 @@ DECISIONS = ("SOURCE_INVALID", "SOURCE_DUPLICATE", "ALREADY_MAPPED",
              "REVIEW_CONFLICT", "REVIEW_MULTIPLE_ADDRESSES",
              "REVIEW_SPATIAL_AMBIGUITY", "REVIEW_NO_BUILDING",
              "AUTO_ATTACH_CANDIDATE")
+SPATIAL_RELATIONSHIPS = ("INSIDE_ONE_BUILDING", "INSIDE_MULTIPLE_BUILDINGS",
+                         "ON_BUILDING_BOUNDARY", "NEAR_OUTSIDE_BUILDING",
+                         "NO_PLAUSIBLE_BUILDING", "NOT_EVALUATED")
+SOURCE_EVIDENCE_REASONS = {"UNSUPPORTED_SOURCE_POSITION_TYPE",
+                           "INSUFFICIENT_POSITIONAL_ACCURACY"}
 REQUIRED = ("schema_version", "candidate_id", "source_dataset", "source_record_id",
             "source_dataset_version", "source_license", "source_permission_status",
             "house_number", "street_name", "city", "state", "zip_code",
@@ -205,24 +210,38 @@ def read_osm(path):
 
     def way_line(w):
         coords = [(nodes[n]["lon"], nodes[n]["lat"]) for n in w.get("nodes", []) if n in nodes]
-        if len(coords) != len(w.get("nodes", [])) or len(coords) < 4:
+        if len(coords) != len(w.get("nodes", [])) or len(coords) < 2:
             return None
         return LineString(coords)
 
     def relation_polygon(obj):
         members = obj.get("members", [])
-        outer = [way_line(ways[m["ref"]]) for m in members
-                 if m["type"] == "way" and m.get("role") == "outer" and m["ref"] in ways]
-        inner = [way_line(ways[m["ref"]]) for m in members
-                 if m["type"] == "way" and m.get("role") == "inner" and m["ref"] in ways]
+        if not members or any(m["type"] != "way" or m.get("role") not in ("outer", "inner")
+                              or m["ref"] not in ways for m in members):
+            return None
+        outer = [way_line(ways[m["ref"]]) for m in members if m["role"] == "outer"]
+        inner = [way_line(ways[m["ref"]]) for m in members if m["role"] == "inner"]
         if not outer or any(line is None for line in outer + inner):
             return None
-        shells = list(polygonize(outer))
+        shells, dangles, cuts, invalid = polygonize_full(outer)
+        if not dangles.is_empty or not cuts.is_empty or not invalid.is_empty:
+            return None
+        shells = list(shells.geoms)
         if not shells:
             return None
         geom = unary_union(shells)
-        holes = list(polygonize(inner))
-        return geom.difference(unary_union(holes)) if holes else geom
+        if inner:
+            holes, dangles, cuts, invalid = polygonize_full(inner)
+            if not dangles.is_empty or not cuts.is_empty or not invalid.is_empty:
+                return None
+            holes = list(holes.geoms)
+            if not holes:
+                return None
+            hole_geom = unary_union(holes)
+            if not geom.covers(hole_geom):
+                return None
+            geom = geom.difference(hole_geom)
+        return geom
 
     for x in data["elements"]:
         tags = x.get("tags", {})
@@ -297,6 +316,7 @@ def run(candidates, osm, *, thresholds=None, scope_bbox=None):
                   "source_location": {"type": "Point", "coordinates": [row.get("longitude"), row.get("latitude")]},
                   "primary_decision": None, "reason_codes": [], "associated_osm_buildings": [],
                   "competing_candidate_buildings": [], "existing_osm_addresses": [],
+                  "spatial_relationship": "NOT_EVALUATED",
                   "existing_osm_address_details": [],
                   "conflicting_values": [], "recommended_review_action": None,
                   "source_provenance": {k: row.get(k) for k in
@@ -340,26 +360,43 @@ def run(candidates, osm, *, thresholds=None, scope_bbox=None):
         nearby = []
         for i in index.query(point.buffer(t["association_buffer_m"])) if index else []:
             i = int(i)
-            distance = round(point.distance(bmetres[i]), 2)
-            clearance = round(point.distance(bmetres[i].boundary), 2)
-            nearby.append((i, distance, clearance, bmetres[i].covers(point)))
+            distance = point.distance(bmetres[i])
+            if distance > t["association_buffer_m"]:
+                continue
+            clearance = point.distance(bmetres[i].boundary)
+            nearby.append((i, distance, clearance, bmetres[i].contains(point),
+                           bmetres[i].touches(point)))
         nearby.sort(key=lambda v: (v[1], buildings[v[0]]["key"]))
         result["competing_candidate_buildings"] = [
-            {"osm_object": buildings[i]["key"], "distance_m": d,
-             "boundary_clearance_m": c, "contains_point": inside} for i, d, c, inside in nearby]
+            {"osm_object": buildings[i]["key"], "distance_m": round(d, 2),
+             "boundary_clearance_m": round(c, 2), "contains_point": inside,
+             "touches_boundary": touches} for i, d, c, inside, touches in nearby]
         containing = [v for v in nearby if v[3]]
+        touching = [v for v in nearby if v[4]]
         if len(containing) == 1:
-            i, d, clearance, _ = containing[0]
+            i, d, clearance, _, _ = containing[0]
+            result["spatial_relationship"] = "INSIDE_ONE_BUILDING"
             result["_building"] = i
             result["associated_osm_buildings"] = [buildings[i]["key"]]
             result["match_evidence"] = {"point_inside": True, "boundary_clearance_m": clearance,
                                         "source_location_type": row["source_location_type"],
                                         "positional_accuracy_m": row.get("positional_accuracy_m"),
                                         "nearby_named_street": key[1] in osm["streets"]}
-        elif len(containing) > 1 or nearby:
+        elif len(containing) > 1:
+            result["spatial_relationship"] = "INSIDE_MULTIPLE_BUILDINGS"
             result.update(primary_decision="REVIEW_SPATIAL_AMBIGUITY",
-                          reason_codes=["OVERLAPPING_BUILDINGS" if len(containing) > 1 else "NEAR_BUILDING_OUTSIDE"])
+                          reason_codes=["OVERLAPPING_BUILDINGS"])
+        elif touching:
+            result["spatial_relationship"] = "ON_BUILDING_BOUNDARY"
+            result.update(primary_decision="REVIEW_SPATIAL_AMBIGUITY",
+                          reason_codes=["SHARED_BUILDING_BOUNDARY" if len(touching) > 1
+                                        else "ON_BUILDING_BOUNDARY"])
+        elif nearby:
+            result["spatial_relationship"] = "NEAR_OUTSIDE_BUILDING"
+            result.update(primary_decision="REVIEW_SPATIAL_AMBIGUITY",
+                          reason_codes=["NEAR_BUILDING_OUTSIDE"])
         else:
+            result["spatial_relationship"] = "NO_PLAUSIBLE_BUILDING"
             result.update(primary_decision="REVIEW_NO_BUILDING", reason_codes=["NO_ELIGIBLE_BUILDING"])
         matches = []
         for a, geom in am:
@@ -390,6 +427,7 @@ def run(candidates, osm, *, thresholds=None, scope_bbox=None):
             row = r["_row"]
             key = candidate_address(row)
             conflicting = []
+            existing_unit_addresses = []
             tags = building["object"].get("tags", {})
             for field, proposed in (("addr:housenumber", row["house_number"]),
                                     ("addr:street", row["street_name"]),
@@ -402,33 +440,40 @@ def run(candidates, osm, *, thresholds=None, scope_bbox=None):
                                     "proposed": None})
             for a in existing:
                 if a["address"] != key and a["key"] != building["key"]:
-                    conflicting.append({"osm_object": a["key"], "existing_address": a["address"], "proposed_address": key})
+                    if a["address"][:2] == key[:2] and (a["address"][2] or key[2]):
+                        existing_unit_addresses.append(a["key"])
+                    else:
+                        conflicting.append({"osm_object": a["key"], "existing_address": a["address"], "proposed_address": key})
             if conflicting:
                 r.update(primary_decision="REVIEW_CONFLICT", reason_codes=["CONFLICTING_OSM_ADDRESS"],
                          conflicting_values=conflicting,
                          existing_osm_addresses=sorted(set(r["existing_osm_addresses"] + [a["key"] for a in existing])),
                          existing_osm_address_details=[{"osm_object": a["key"], "address": a["address"]} for a in existing])
-            elif len(distinct) > 1 or key[2] or unit_evidence or any(candidate_address(x["_row"])[2] for x in group):
+            elif len(distinct) > 1 or key[2] or unit_evidence or existing_unit_addresses or any(candidate_address(x["_row"])[2] for x in group):
                 r.update(primary_decision="REVIEW_MULTIPLE_ADDRESSES",
                          reason_codes=["MULTIPLE_BUILDING_ADDRESSES" if len(distinct) > 1 else "UNIT_EVIDENCE"],
                          match_evidence={**r["match_evidence"], "building_source_addresses": sorted(distinct),
-                                         "osm_unit_markers": unit_evidence, "building_tags": tags})
-            elif len(r["competing_candidate_buildings"]) > 1:
-                r.update(primary_decision="REVIEW_SPATIAL_AMBIGUITY", reason_codes=["COMPETING_BUILDINGS"])
-            elif r["primary_decision"] == "REVIEW_SPATIAL_AMBIGUITY":
-                pass
-            elif r["match_evidence"].get("boundary_clearance_m", 0) < t["boundary_clearance_m"]:
-                r.update(primary_decision="REVIEW_SPATIAL_AMBIGUITY", reason_codes=["NEAR_BUILDING_BOUNDARY"])
-            elif str(row["source_location_type"]).lower() not in ("rooftop", "building", "structure"):
-                r.update(primary_decision="REVIEW_SPATIAL_AMBIGUITY", reason_codes=["UNSUPPORTED_SOURCE_POSITION_TYPE"])
-            elif row.get("positional_accuracy_m") in (None, "") or float(row["positional_accuracy_m"]) > t["max_accuracy_m"]:
-                r.update(primary_decision="REVIEW_SPATIAL_AMBIGUITY", reason_codes=["INSUFFICIENT_POSITIONAL_ACCURACY"])
-            elif not r["match_evidence"]["nearby_named_street"]:
-                r.update(primary_decision="REVIEW_SPATIAL_AMBIGUITY", reason_codes=["STREET_NOT_IN_OSM_CONTEXT"])
-            elif not building["object"].get("version"):
-                r.update(primary_decision="REVIEW_SPATIAL_AMBIGUITY", reason_codes=["MISSING_OSM_VERSION"])
+                                         "osm_unit_markers": unit_evidence,
+                                         "existing_osm_unit_addresses": existing_unit_addresses,
+                                         "building_tags": tags})
             else:
-                r.update(primary_decision="AUTO_ATTACH_CANDIDATE", reason_codes=["SINGLE_BUILDING_ADDRESS"])
+                blockers = []
+                if len(r["competing_candidate_buildings"]) > 1:
+                    blockers.append("COMPETING_BUILDINGS")
+                if r["match_evidence"].get("boundary_clearance_m", 0) < t["boundary_clearance_m"]:
+                    blockers.append("NEAR_BUILDING_BOUNDARY")
+                if str(row["source_location_type"]).lower() not in ("rooftop", "building", "structure"):
+                    blockers.append("UNSUPPORTED_SOURCE_POSITION_TYPE")
+                if row.get("positional_accuracy_m") in (None, "") or float(row["positional_accuracy_m"]) > t["max_accuracy_m"]:
+                    blockers.append("INSUFFICIENT_POSITIONAL_ACCURACY")
+                if not r["match_evidence"]["nearby_named_street"]:
+                    blockers.append("STREET_NOT_IN_OSM_CONTEXT")
+                if not building["object"].get("version"):
+                    blockers.append("MISSING_OSM_VERSION")
+                if blockers:
+                    r.update(primary_decision="REVIEW_SPATIAL_AMBIGUITY", reason_codes=blockers)
+                else:
+                    r.update(primary_decision="AUTO_ATTACH_CANDIDATE", reason_codes=["SINGLE_BUILDING_ADDRESS"])
     updates, review = [], []
     recommendations = {"ALREADY_MAPPED": "Inspect equivalent OSM address; no edit",
                        "REVIEW_CONFLICT": "Verify source and OSM address; preserve existing tags",
@@ -482,6 +527,14 @@ def write_artifacts(out_dir, candidates, osm, results, updates, review, osm_only
     def write(name, obj):
         (out / name).write_text(json.dumps(obj, indent=2, ensure_ascii=False, default=list) + "\n")
     counts = Counter(r["primary_decision"] for r in results)
+    spatial_counts = Counter(r["spatial_relationship"] for r in results)
+    if set(spatial_counts) - set(SPATIAL_RELATIONSHIPS) or sum(spatial_counts.values()) != len(results):
+        raise ValueError("inconsistent spatial relationship counts")
+    source_only = sum(r["spatial_relationship"] == "INSIDE_ONE_BUILDING"
+                      and r["primary_decision"] == "REVIEW_SPATIAL_AMBIGUITY"
+                      and bool(r["reason_codes"])
+                      and set(r["reason_codes"]) <= SOURCE_EVIDENCE_REASONS
+                      for r in results)
     source = {"schema_version": SCHEMA, "source_file_sha256": sha256(source_path),
               "osm_file_sha256": sha256(osm_path), "source_provider": sorted({c.get("source_dataset") for c in candidates}),
               "source_versions": sorted({c.get("source_dataset_version") for c in candidates}),
@@ -507,12 +560,12 @@ def write_artifacts(out_dir, candidates, osm, results, updates, review, osm_only
                   "invalid_osm_buildings": osm["invalid_buildings"],
                   "unique_osm_buildings_affected": len({(u["target_osm_type"], u["target_osm_id"]) for u in updates}),
                   "proposed_osm_modifications": len(updates), "osm_only_observations": len(osm_only),
-                  "osm_only_objects": osm_only, "candidate_to_building_relationships": {
-                      "one_associated_building": sum(len(r["associated_osm_buildings"]) == 1 for r in results),
-                      "competing_building_candidates": sum(len(r["competing_candidate_buildings"]) > 1 for r in results),
-                      "none": sum(not r["competing_candidate_buildings"] for r in results),
-                      "near_outside_without_association": sum(not r["associated_osm_buildings"] and
-                                                             bool(r["competing_candidate_buildings"]) for r in results)},
+                  "osm_only_objects": osm_only,
+                  "candidate_to_building_relationships": {k: spatial_counts[k] for k in SPATIAL_RELATIONSHIPS},
+                  "inside_one_blocked_only_by_source_position_or_accuracy": source_only,
+                  "source_evidence_blocker_counts": {
+                      code: sum(code in r["reason_codes"] for r in results)
+                      for code in sorted(SOURCE_EVIDENCE_REASONS)},
                   "validation_findings": {
                       "source_location_types": dict(Counter(str(c.get("source_location_type")) for c in candidates)),
                       "missing_positional_accuracy": sum(c.get("positional_accuracy_m") in (None, "") for c in candidates),
@@ -527,10 +580,19 @@ def write_artifacts(out_dir, candidates, osm, results, updates, review, osm_only
                                "Source permission for public OSM import is pending independent review"],
                   "unresolved_questions": ["Texas contributor permission for ODbL", "NAD positional accuracy for selected records"]}
     write("import_assessment.json", assessment)
-    sample = []
+    sample, sampled = [], set()
+    def add_sample(records):
+        for record in sorted(records, key=lambda r: r["candidate_id"])[:3]:
+            if id(record) not in sampled:
+                sampled.add(id(record))
+                sample.append(record)
     for decision in DECISIONS:
-        sample.extend(sorted((r for r in results if r["primary_decision"] == decision),
-                             key=lambda r: r["candidate_id"])[:3])
+        add_sample(r for r in results if r["primary_decision"] == decision)
+    for relationship in SPATIAL_RELATIONSHIPS:
+        add_sample(r for r in results if r["spatial_relationship"] == relationship)
+    add_sample(r for r in results if r["spatial_relationship"] == "INSIDE_ONE_BUILDING"
+               and r["primary_decision"] == "REVIEW_SPATIAL_AMBIGUITY"
+               and r["reason_codes"] and set(r["reason_codes"]) <= SOURCE_EVIDENCE_REASONS)
     write("validation_sample.json", {"schema_version": SCHEMA, "records": sample})
     lines = ["# Building-aware import assessment", "", f"Study area: {study_area}.",
              f"Source: {', '.join(source['source_provider'])}; {', '.join(source['source_versions'])}.",
@@ -548,8 +610,14 @@ def write_artifacts(out_dir, candidates, osm, results, updates, review, osm_only
     lines += [f"| Unique OSM buildings affected | {assessment['unique_osm_buildings_affected']} |",
               f"| Proposed OSM modifications | {len(updates)} |",
               f"| OSM-only observations | {len(osm_only)} |", "",
-              f"Buildings in extract: {len(osm['buildings'])}; address-bearing buildings: {assessment['address_bearing_building_count']}.",
-              f"Candidate-to-building relationships: {assessment['candidate_to_building_relationships']}.",
+              f"Buildings in extract: {len(osm['buildings'])}; address-bearing buildings: {assessment['address_bearing_building_count']}.", "",
+              "## Spatial relationships", "",
+              "These categories are mutually exclusive across all source rows. Boundary points are separate from interior and outside points.",
+              "", "| Relationship | Records |", "| --- | ---: |"]
+    lines += [f"| {key} | {spatial_counts[key]} |" for key in SPATIAL_RELATIONSHIPS]
+    lines += ["",
+              f"Inside one building and blocked only by source position or accuracy: {source_only}.",
+              f"Source evidence blocker counts (overlapping): {assessment['source_evidence_blocker_counts']}.",
               f"Thresholds (metres): {thresholds}.",
               f"Validation findings: {assessment['validation_findings']}.",
               f"Processing duration: {duration:.3f} seconds.", "",

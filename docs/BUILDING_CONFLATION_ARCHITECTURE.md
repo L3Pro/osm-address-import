@@ -13,7 +13,8 @@ write mode. The existing Brazil import and reporting modules remain intact.
    references, relation members, and coordinates. It builds polygons for closed
    building ways and complete multipolygon building relations. Incomplete or
    invalid geometry cannot receive an update.
-3. Spatial association uses projected metre distances and an index. Interior
+3. Spatial association uses projected metre distances and an index followed by
+   an exact geometry-distance check. Interior
    points, boundary distance, competing buildings, source location semantics,
    and positional accuracy are evaluated independently. A nearby street name
    is supporting evidence. Proximity alone never selects a building.
